@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --animate-crash-shake: crash-shake 0.4s ease-in-out;
+  --animate-crash-flash: crash-flash 0.4s ease-in-out;
+  --animate-ping-once: ping-once 0.5s ease-out forwards;
+}
+
+@keyframes crash-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+
+@keyframes crash-flash {
+  0% { background-color: rgb(220 38 38 / 0.3); }
+  50% { background-color: rgb(220 38 38 / 0.6); }
+  100% { background-color: transparent; }
+}
+
+@keyframes ping-once {
+  0% { transform: scale(0.5); opacity: 1; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background-color: rgb(17 24 39);
+  color: white;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
