@@ -1,14 +1,14 @@
-import type { GamePhase, Round } from '../types/game'
+import type { GamePhase } from '../services/types'
 import { formatMultiplier } from '../utils/format'
 
 interface GameCanvasProps {
   phase: GamePhase
   countdown: number
   currentMultiplier: number
-  currentRound: Round | null
+  crashPoint: number | null
 }
 
-export function GameCanvas({ phase, countdown, currentMultiplier, currentRound }: GameCanvasProps) {
+export function GameCanvas({ phase, countdown, currentMultiplier, crashPoint }: GameCanvasProps) {
   const isCrashed = phase === 'CRASHED'
   const isRunning = phase === 'RUNNING'
 
@@ -115,9 +115,9 @@ export function GameCanvas({ phase, countdown, currentMultiplier, currentRound }
               <span className="text-yellow-400 font-bold">{countdown}s</span>
             </span>
           )}
-          {isCrashed && currentRound && (
+          {isCrashed && crashPoint !== null && (
             <span className="text-red-400 font-bold animate-crash-shake">
-              CRASHED @ {formatMultiplier(currentRound.crashPoint)}
+              CRASHED @ {formatMultiplier(crashPoint)}
             </span>
           )}
         </div>

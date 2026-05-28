@@ -1,286 +1,287 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { GamePhase, PlayerBet, Round } from '../types/game'
-import { calculatePayout, validateBet } from '../utils/game'
-import { fetchRoundResult } from '../services/gameService'
+import { useAuth } from '../auth/useAuth'
+import { on as onSocket, getSocket, emitCashout } from '../services/socket'
+import * as betApi from '../services/betApi'
+import * as walletApi from '../services/walletApi'
+import { getRecentRounds } from '../services/historyApi'
+import { friendlyError } from '../services/errorMessages'
+import type { Bet, BetSlotId, GamePhase, RoundSummary } from '../services/types'
 
-const INITIAL_BALANCE = 1000
-const WAITING_SECONDS = 5
-const CRASHED_SECONDS = 3
+// Must match the backend ROUND_GROWTH_RATE; the client only interpolates
+// between 100ms server ticks, so small mismatches self-correct on each tick.
+const GROWTH_RATE = 0.06
 const HISTORY_LIMIT = 20
+const SLOT_IDS: BetSlotId[] = [1, 2]
 
-function loadBalance(): number {
-  try {
-    const raw = localStorage.getItem('crashPilot_balance')
-    if (raw === null) return INITIAL_BALANCE
-    const parsed = parseFloat(raw)
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : INITIAL_BALANCE
-  } catch {
-    return INITIAL_BALANCE
-  }
+export type SlotPending = 'placing' | 'cashing' | null
+
+export interface SlotState {
+  bet: Bet | null
+  pending: SlotPending
 }
 
-function saveBalance(balance: number): void {
-  try {
-    localStorage.setItem('crashPilot_balance', String(balance))
-  } catch {}
-}
+type Slots = Record<BetSlotId, SlotState>
 
-function loadHistory(): Round[] {
-  try {
-    const raw = localStorage.getItem('crashPilot_history')
-    if (!raw) return []
-    return JSON.parse(raw) as Round[]
-  } catch {
-    return []
-  }
-}
-
-function saveHistory(history: Round[]): void {
-  try {
-    localStorage.setItem('crashPilot_history', JSON.stringify(history.slice(0, HISTORY_LIMIT)))
-  } catch {}
-}
-
-function makeEmptyBet(): PlayerBet {
-  return { amount: 0, placed: false, cashedOut: false, cashOutMultiplier: null, payout: 0, autoCashOut: null }
+const EMPTY_SLOTS: Slots = {
+  1: { bet: null, pending: null },
+  2: { bet: null, pending: null },
 }
 
 export interface UseCrashGameReturn {
-  balance: number
+  connected: boolean
   phase: GamePhase
   countdown: number
   currentMultiplier: number
-  currentRound: Round | null
-  playerBet: PlayerBet | null
-  nextRoundBet: PlayerBet | null
-  roundHistory: Round[]
-  betError: string | null
-  placeBet: (amount: number, autoCashOut?: number | null) => void
-  queueNextRoundBet: (amount: number, autoCashOut?: number | null) => void
-  cancelNextRoundBet: () => void
-  cashOut: () => void
-  resetBalance: () => void
+  currentRoundId: string | null
+  crashPoint: number | null
+  roundHistory: RoundSummary[]
+  balance: number | null
+  slots: Slots
+  actionError: string | null
+  placeBet: (slotId: BetSlotId, amount: number, autoCashOut?: number | null) => Promise<void>
+  cashOut: (slotId: BetSlotId) => void
+  resetBalance: () => Promise<void>
+  clearError: () => void
 }
 
 export function useCrashGame(): UseCrashGameReturn {
-  const [balance, setBalance] = useState<number>(loadBalance)
+  const { status } = useAuth()
+  const authed = status === 'authenticated'
+
+  const [connected, setConnected] = useState(() => getSocket().connected)
   const [phase, setPhase] = useState<GamePhase>('WAITING')
-  const [countdown, setCountdown] = useState<number>(WAITING_SECONDS)
-  const [currentMultiplier, setCurrentMultiplier] = useState<number>(1)
-  const [currentRound, setCurrentRound] = useState<Round | null>(null)
-  const [playerBet, setPlayerBet] = useState<PlayerBet | null>(null)
-  const [nextRoundBet, setNextRoundBet] = useState<PlayerBet | null>(null)
-  const [roundHistory, setRoundHistory] = useState<Round[]>(loadHistory)
-  const [betError, setBetError] = useState<string | null>(null)
+  const [countdown, setCountdown] = useState(0)
+  const [currentMultiplier, setCurrentMultiplier] = useState(1)
+  const [currentRoundId, setCurrentRoundId] = useState<string | null>(null)
+  const [crashPoint, setCrashPoint] = useState<number | null>(null)
+  const [roundHistory, setRoundHistory] = useState<RoundSummary[]>([])
+  const [balance, setBalance] = useState<number | null>(null)
+  const [slots, setSlots] = useState<Slots>(EMPTY_SLOTS)
+  const [actionError, setActionError] = useState<string | null>(null)
 
+  // phaseRef mirrors `phase` for reads inside the RAF/socket callbacks. It is
+  // written in the event handlers (never during render) so the animation loop
+  // sees the new phase immediately, before passive effects run.
   const phaseRef = useRef<GamePhase>('WAITING')
-  const playerBetRef = useRef<PlayerBet | null>(null)
-  const multiplierRef = useRef<number>(1)
-  const nextRoundBetRef = useRef<PlayerBet | null>(null)
+  // slotsRef mirrors `slots` so `cashOut` can read the current slot synchronously
+  // without putting a side effect inside a setState updater (StrictMode invokes
+  // updaters twice in dev, which would double-emit the bet:cashout message).
+  const slotsRef = useRef<Slots>(EMPTY_SLOTS)
   const rafRef = useRef<number | null>(null)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const roundStartTimeRef = useRef<number>(0)
-  const crashPointRef = useRef<number>(2)
-
-  phaseRef.current = phase
-  playerBetRef.current = playerBet
-  multiplierRef.current = currentMultiplier
-  nextRoundBetRef.current = nextRoundBet
+  // Latest server multiplier anchor, timestamped on client receipt to avoid clock skew.
+  const anchorRef = useRef<{ multiplier: number; at: number }>({ multiplier: 1, at: 0 })
 
   useEffect(() => {
-    saveBalance(balance)
-  }, [balance])
+    slotsRef.current = slots
+  }, [slots])
 
-  const applyCashOut = useCallback((multiplier: number, bet: PlayerBet) => {
-    const payout = calculatePayout(bet.amount, multiplier)
-    const updatedBet: PlayerBet = { ...bet, cashedOut: true, cashOutMultiplier: multiplier, payout }
-    setPlayerBet(updatedBet)
-    playerBetRef.current = updatedBet
-    setBalance(prev => {
-      const next = Math.round((prev + payout) * 100) / 100
-      saveBalance(next)
-      return next
-    })
-  }, [])
-
-  const stopLoop = useCallback(() => {
+  const stopRaf = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = null
     }
-    if (intervalRef.current !== null) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
+  }, [])
+
+  // Smoothly grow the displayed multiplier from the last server anchor.
+  const runRaf = useCallback(() => {
+    const animate = () => {
+      if (phaseRef.current !== 'RUNNING') return
+      const { multiplier, at } = anchorRef.current
+      const elapsed = (performance.now() - at) / 1000
+      setCurrentMultiplier(multiplier * Math.exp(GROWTH_RATE * elapsed))
+      rafRef.current = requestAnimationFrame(animate)
+    }
+    stopRaf()
+    rafRef.current = requestAnimationFrame(animate)
+  }, [stopRaf])
+
+  // ── Round lifecycle (broadcast events) ──────────────────────────────────
+  useEffect(() => {
+    const offs = [
+      onSocket('round:waiting', (e) => {
+        stopRaf()
+        phaseRef.current = 'WAITING'
+        setPhase('WAITING')
+        setCurrentRoundId(e.roundId)
+        setCountdown(e.countdown)
+        setCurrentMultiplier(1)
+        setCrashPoint(null)
+        setSlots(EMPTY_SLOTS) // previous round resolved
+      }),
+      onSocket('round:countdown', (e) => setCountdown(e.countdown)),
+      onSocket('round:started', (e) => {
+        phaseRef.current = 'RUNNING'
+        setPhase('RUNNING')
+        setCurrentRoundId(e.roundId)
+        setCrashPoint(null)
+        anchorRef.current = { multiplier: 1, at: performance.now() }
+        setCurrentMultiplier(1)
+        runRaf()
+      }),
+      onSocket('round:multiplier', (e) => {
+        // Re-anchor on each server tick; if we joined mid-round, this also
+        // transitions us into RUNNING and starts the animation.
+        anchorRef.current = { multiplier: e.multiplier, at: performance.now() }
+        if (phaseRef.current !== 'RUNNING') {
+          phaseRef.current = 'RUNNING'
+          setPhase('RUNNING')
+          setCrashPoint(null)
+          runRaf()
+        }
+        setCurrentMultiplier(e.multiplier)
+      }),
+      onSocket('round:crashed', (e) => {
+        stopRaf()
+        phaseRef.current = 'CRASHED'
+        setPhase('CRASHED')
+        setCrashPoint(e.crashPoint)
+        setCurrentMultiplier(e.crashPoint)
+        setRoundHistory((prev) =>
+          [
+            { id: e.roundId, crashPoint: e.crashPoint, startedAt: null, crashedAt: e.crashedAt },
+            ...prev,
+          ].slice(0, HISTORY_LIMIT),
+        )
+      }),
+    ]
+    return () => offs.forEach((off) => off())
+  }, [runRaf, stopRaf])
+
+  // ── Connection state + reconnect resync ─────────────────────────────────
+  useEffect(() => {
+    const socket = getSocket()
+    const onConnect = () => setConnected(true)
+    const onDisconnect = () => setConnected(false)
+    socket.on('connect', onConnect)
+    socket.on('disconnect', onDisconnect)
+    return () => {
+      socket.off('connect', onConnect)
+      socket.off('disconnect', onDisconnect)
     }
   }, [])
 
-  const startWaiting = useCallback((pendingBet: PlayerBet | null, history: Round[]) => {
-    stopLoop()
-
-    setPhase('WAITING')
-    phaseRef.current = 'WAITING'
-    setCountdown(WAITING_SECONDS)
-    setCurrentMultiplier(1)
-    multiplierRef.current = 1
-    setCurrentRound(null)
-
-    if (pendingBet) {
-      setPlayerBet(pendingBet)
-      playerBetRef.current = pendingBet
-      setNextRoundBet(null)
-      nextRoundBetRef.current = null
-    } else {
-      setPlayerBet(null)
-      playerBetRef.current = null
+  // ── Public round history (seed once) ────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    getRecentRounds(HISTORY_LIMIT)
+      .then((rounds) => !cancelled && setRoundHistory(rounds))
+      .catch(() => {})
+    return () => {
+      cancelled = true
     }
+  }, [])
 
-    let tick = WAITING_SECONDS
-    intervalRef.current = setInterval(async () => {
-      tick -= 1
-      setCountdown(tick)
-      if (tick > 0) return
-
-      stopLoop()
-
-      const crashPoint = await fetchRoundResult()
-      crashPointRef.current = crashPoint
-      const round: Round = {
-        id: crypto.randomUUID(),
-        crashPoint,
-        startedAt: Date.now(),
-        crashedAt: null,
-      }
-      setCurrentRound(round)
-      setPhase('RUNNING')
-      phaseRef.current = 'RUNNING'
-      roundStartTimeRef.current = performance.now()
-
-      const animate = (now: number) => {
-        if (phaseRef.current !== 'RUNNING') return
-
-        const elapsed = (now - roundStartTimeRef.current) / 1000
-        const multiplier = Math.exp(0.06 * elapsed)
-        setCurrentMultiplier(multiplier)
-        multiplierRef.current = multiplier
-
-        const bet = playerBetRef.current
-        if (bet?.placed && !bet.cashedOut && bet.autoCashOut !== null && multiplier >= bet.autoCashOut) {
-          applyCashOut(multiplier, bet)
-          // Keep animating — round still runs until crash
-          rafRef.current = requestAnimationFrame(animate)
-          return
-        }
-
-        if (multiplier >= crashPointRef.current) {
-          rafRef.current = null
-          const crashedRound: Round = { ...round, crashedAt: Date.now() }
-          setCurrentRound(crashedRound)
-          setPhase('CRASHED')
-          phaseRef.current = 'CRASHED'
-
-          const newHistory = [crashedRound, ...history].slice(0, HISTORY_LIMIT)
-          setRoundHistory(newHistory)
-          saveHistory(newHistory)
-
-          setTimeout(() => {
-            startWaiting(nextRoundBetRef.current, newHistory)
-          }, CRASHED_SECONDS * 1000)
-          return
-        }
-
-        rafRef.current = requestAnimationFrame(animate)
-      }
-
-      rafRef.current = requestAnimationFrame(animate)
-    }, 1000)
-  }, [applyCashOut, stopLoop])
+  // ── Private state: wallet + active bets, gated on auth ──────────────────
+  const resync = useCallback(async () => {
+    if (!authed) return
+    try {
+      const [bal, active] = await Promise.all([walletApi.getBalance(), betApi.getActiveBets()])
+      setBalance(bal)
+      setSlots(() => {
+        const next: Slots = { 1: { bet: null, pending: null }, 2: { bet: null, pending: null } }
+        for (const bet of active) next[bet.slotId] = { bet, pending: null }
+        return next
+      })
+    } catch {
+      // leave state as-is; a 401 will have dropped us to guest already
+    }
+  }, [authed])
 
   useEffect(() => {
-    startWaiting(null, loadHistory())
-    return stopLoop
-  }, [startWaiting, stopLoop])
+    if (!authed) return // guest values are derived at return; nothing to fetch
+    let active = true
+    void (async () => {
+      if (active) await resync()
+    })()
+    const socket = getSocket()
+    socket.on('connect', resync) // re-pull after reconnect
+    return () => {
+      active = false
+      socket.off('connect', resync)
+    }
+  }, [authed, resync])
 
-  const placeBet = useCallback((amount: number, autoCashOut: number | null = null) => {
-    if (phaseRef.current !== 'WAITING') {
-      setBetError('Bets can only be placed during the waiting phase')
-      return
-    }
-    if (playerBetRef.current?.placed) {
-      setBetError('You already have an active bet this round')
-      return
-    }
-    setBalance(prev => {
-      const error = validateBet(amount, prev)
-      if (error) {
-        setBetError(error)
-        return prev
+  // ── Private bet/wallet events ───────────────────────────────────────────
+  useEffect(() => {
+    const offs = [
+      onSocket('wallet:updated', (e) => setBalance(e.balance)),
+      onSocket('bet:cashedOut', (e) => {
+        const bet = e.bet
+        setSlots((prev) => ({ ...prev, [bet.slotId]: { bet, pending: null } }))
+      }),
+      onSocket('bet:lost', (e) => {
+        const { slotId } = e.bet
+        setSlots((prev) => ({
+          ...prev,
+          [slotId]: prev[slotId].bet
+            ? { bet: { ...prev[slotId].bet!, status: 'LOST' }, pending: null }
+            : prev[slotId],
+        }))
+      }),
+      onSocket('error', (e) => setActionError(friendlyError(e))),
+    ]
+    return () => offs.forEach((off) => off())
+  }, [])
+
+  // ── Actions ─────────────────────────────────────────────────────────────
+  const placeBet = useCallback(
+    async (slotId: BetSlotId, amount: number, autoCashOut: number | null = null) => {
+      setActionError(null)
+      setSlots((prev) => ({ ...prev, [slotId]: { ...prev[slotId], pending: 'placing' } }))
+      try {
+        const { bet, balance: newBalance } = await betApi.placeBet(slotId, amount, autoCashOut)
+        setSlots((prev) => ({ ...prev, [slotId]: { bet, pending: null } }))
+        setBalance(newBalance)
+      } catch (err) {
+        setSlots((prev) => ({ ...prev, [slotId]: { ...prev[slotId], pending: null } }))
+        setActionError(friendlyError(err))
       }
-      setBetError(null)
-      const bet: PlayerBet = { ...makeEmptyBet(), amount, placed: true, autoCashOut }
-      setPlayerBet(bet)
-      playerBetRef.current = bet
-      const next = Math.round((prev - amount) * 100) / 100
-      saveBalance(next)
-      return next
+    },
+    [],
+  )
+
+  const cashOut = useCallback((slotId: BetSlotId) => {
+    const slot = slotsRef.current[slotId]
+    if (!slot.bet || slot.bet.status !== 'PLACED' || slot.pending) return
+    emitCashout(slot.bet.id)
+    setSlots((prev) => {
+      const cur = prev[slotId]
+      if (!cur.bet || cur.pending) return prev
+      return { ...prev, [slotId]: { ...cur, pending: 'cashing' } }
     })
   }, [])
 
-  const queueNextRoundBet = useCallback((amount: number, autoCashOut: number | null = null) => {
-    if (phaseRef.current !== 'RUNNING') {
-      setBetError('Next-round bets can only be queued during a running round')
-      return
+  const resetBalance = useCallback(async () => {
+    setActionError(null)
+    try {
+      const newBalance = await walletApi.resetBalance()
+      setBalance(newBalance)
+    } catch (err) {
+      setActionError(friendlyError(err))
     }
-    setBalance(prev => {
-      const error = validateBet(amount, prev)
-      if (error) {
-        setBetError(error)
-        return prev
-      }
-      setBetError(null)
-      const bet: PlayerBet = { ...makeEmptyBet(), amount, placed: true, autoCashOut }
-      setNextRoundBet(bet)
-      nextRoundBetRef.current = bet
-      return prev
-    })
   }, [])
 
-  const cancelNextRoundBet = useCallback(() => {
-    setNextRoundBet(null)
-    nextRoundBetRef.current = null
-    setBetError(null)
-  }, [])
+  const clearError = useCallback(() => setActionError(null), [])
 
-  const cashOut = useCallback(() => {
-    if (phaseRef.current !== 'RUNNING') return
-    const bet = playerBetRef.current
-    if (!bet?.placed || bet.cashedOut) return
-    applyCashOut(multiplierRef.current, bet)
-  }, [applyCashOut])
-
-  const resetBalance = useCallback(() => {
-    setBalance(INITIAL_BALANCE)
-    saveBalance(INITIAL_BALANCE)
-    setPlayerBet(null)
-    playerBetRef.current = null
-    setNextRoundBet(null)
-    nextRoundBetRef.current = null
-    setBetError(null)
-  }, [])
+  useEffect(() => stopRaf, [stopRaf])
 
   return {
-    balance,
+    connected,
     phase,
     countdown,
     currentMultiplier,
-    currentRound,
-    playerBet,
-    nextRoundBet,
+    currentRoundId,
+    crashPoint,
     roundHistory,
-    betError,
+    // Guest sees no private state even if stale values linger in state after logout.
+    balance: authed ? balance : null,
+    slots: authed ? slots : EMPTY_SLOTS,
+    actionError,
     placeBet,
-    queueNextRoundBet,
-    cancelNextRoundBet,
     cashOut,
     resetBalance,
+    clearError,
   }
 }
+
+export { SLOT_IDS }

@@ -1,166 +1,174 @@
 import { useState } from 'react'
-import type { GamePhase, PlayerBet } from '../types/game'
+import type { GamePhase, BetSlotId } from '../services/types'
+import type { SlotState } from '../hooks/useCrashGame'
 import { formatCredits, formatMultiplier } from '../utils/format'
 
 interface BettingPanelProps {
+  slotId: BetSlotId
   phase: GamePhase
   currentMultiplier: number
-  playerBet: PlayerBet | null
-  nextRoundBet: PlayerBet | null
-  betError: string | null
-  onPlaceBet: (amount: number, autoCashOut: number | null) => void
-  onQueueNextRoundBet: (amount: number, autoCashOut: number | null) => void
-  onCancelNextRoundBet: () => void
-  onCashOut: () => void
+  slot: SlotState
+  authed: boolean
+  onPlaceBet: (slotId: BetSlotId, amount: number, autoCashOut: number | null) => void
+  onCashOut: (slotId: BetSlotId) => void
+  onRequireLogin: () => void
 }
 
 const QUICK_AMOUNTS = [10, 25, 50, 100]
 
 export function BettingPanel({
+  slotId,
   phase,
   currentMultiplier,
-  playerBet,
-  nextRoundBet,
-  betError,
+  slot,
+  authed,
   onPlaceBet,
-  onQueueNextRoundBet,
-  onCancelNextRoundBet,
   onCashOut,
+  onRequireLogin,
 }: BettingPanelProps) {
   const [betInput, setBetInput] = useState('')
   const [autoCashOutInput, setAutoCashOutInput] = useState('')
 
+  const { bet, pending } = slot
   const parsedAmount = parseFloat(betInput)
-  const parsedAutoCashOut = parseFloat(autoCashOutInput) || null
   const isValidAmount = Number.isFinite(parsedAmount) && parsedAmount > 0
+  const parsedAutoCashOut = parseFloat(autoCashOutInput)
+  const autoCashOut = Number.isFinite(parsedAutoCashOut) && parsedAutoCashOut > 1 ? parsedAutoCashOut : null
 
-  const canPlaceBet = phase === 'WAITING' && !playerBet?.placed && isValidAmount
-  const canQueue = phase === 'RUNNING' && !nextRoundBet && isValidAmount
-  const canCashOut = phase === 'RUNNING' && playerBet?.placed && !playerBet.cashedOut
+  const canPlace = authed && phase === 'WAITING' && !bet && isValidAmount && !pending
+  const isPlaced = bet?.status === 'PLACED'
+  const canCashOut = phase === 'RUNNING' && isPlaced
+  const inputsDisabled = !authed || phase !== 'WAITING' || !!bet || pending === 'placing'
 
-  const possiblePayout =
-    phase === 'RUNNING' && playerBet?.placed && !playerBet.cashedOut
-      ? playerBet.amount * currentMultiplier
-      : null
-
-  function handleSubmit() {
-    if (!isValidAmount) return
-    const autoCashOut = parsedAutoCashOut && parsedAutoCashOut > 1 ? parsedAutoCashOut : null
-    if (phase === 'WAITING') {
-      onPlaceBet(parsedAmount, autoCashOut)
-    } else if (phase === 'RUNNING') {
-      onQueueNextRoundBet(parsedAmount, autoCashOut)
+  function handlePlace() {
+    if (!authed) {
+      onRequireLogin()
+      return
     }
-  }
-
-  function handleQuickAmount(amount: number) {
-    setBetInput(String(amount))
+    if (!canPlace) return
+    onPlaceBet(slotId, parsedAmount, autoCashOut)
   }
 
   return (
-    <div className="bg-gray-800 rounded-2xl p-4 md:p-6 space-y-4">
-      {/* Queued next-round bet display */}
-      {nextRoundBet && (
-        <div className="flex items-center justify-between bg-yellow-950 border border-yellow-700 rounded-xl px-4 py-3">
-          <div className="text-sm text-yellow-300 font-medium">
-            ⏳ Queued: {formatCredits(nextRoundBet.amount)}
-            {nextRoundBet.autoCashOut && (
-              <span className="text-yellow-500"> @ {formatMultiplier(nextRoundBet.autoCashOut)}</span>
-            )}
+    <div className="bg-gray-800 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Slot {slotId}</span>
+        {bet && <StatusBadge slot={slot} phase={phase} />}
+      </div>
+
+      {/* Resolved/active bet summary */}
+      {bet ? (
+        <BetSummary slot={slot} phase={phase} currentMultiplier={currentMultiplier} />
+      ) : (
+        <>
+          <input
+            type="number"
+            min="1"
+            value={betInput}
+            onChange={(e) => setBetInput(e.target.value)}
+            placeholder="Bet amount"
+            disabled={inputsDisabled}
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-yellow-500 disabled:opacity-40 transition-colors"
+          />
+          <input
+            type="number"
+            min="1.01"
+            step="0.01"
+            value={autoCashOutInput}
+            onChange={(e) => setAutoCashOutInput(e.target.value)}
+            placeholder="Auto cash out (optional)"
+            disabled={inputsDisabled}
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-yellow-500 disabled:opacity-40 transition-colors"
+          />
+          <div className="flex gap-1.5">
+            {QUICK_AMOUNTS.map((amount) => (
+              <button
+                key={amount}
+                onClick={() => setBetInput(String(amount))}
+                disabled={inputsDisabled}
+                className="flex-1 py-1.5 text-xs font-medium bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 hover:text-white disabled:opacity-40 transition-colors"
+              >
+                {amount}
+              </button>
+            ))}
           </div>
-          <button
-            onClick={onCancelNextRoundBet}
-            className="text-xs text-yellow-600 hover:text-yellow-400 transition-colors px-2 py-1 rounded"
-            aria-label="Cancel queued bet"
-          >
-            Cancel
-          </button>
-        </div>
+        </>
       )}
 
-      {/* Bet amount input */}
-      <div className="space-y-1">
-        <label htmlFor="bet-amount" className="block text-sm text-gray-400 font-medium">
-          Bet Amount
-        </label>
-        <input
-          id="bet-amount"
-          type="number"
-          min="1"
-          value={betInput}
-          onChange={e => setBetInput(e.target.value)}
-          placeholder="Enter amount"
-          className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-yellow-500 transition-colors"
-          disabled={!!nextRoundBet || (phase === 'WAITING' && !!playerBet?.placed)}
-          aria-describedby={betError ? 'bet-error' : undefined}
-        />
-        {betError && (
-          <p id="bet-error" className="text-xs text-red-400" role="alert">
-            {betError}
-          </p>
-        )}
-      </div>
+      {/* Action button */}
+      {canCashOut ? (
+        <button
+          onClick={() => onCashOut(slotId)}
+          disabled={pending === 'cashing'}
+          className="w-full py-3 font-bold rounded-xl bg-green-500 text-white hover:bg-green-400 disabled:opacity-50 transition-colors"
+        >
+          {pending === 'cashing'
+            ? 'Cashing…'
+            : `Cash Out ${formatCredits(Math.floor((bet?.amount ?? 0) * currentMultiplier * 100) / 100)}`}
+        </button>
+      ) : !bet ? (
+        <button
+          onClick={handlePlace}
+          disabled={authed ? !canPlace : false}
+          className="w-full py-3 font-bold rounded-xl bg-yellow-500 text-gray-900 hover:bg-yellow-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {!authed
+            ? 'Log in to bet'
+            : pending === 'placing'
+              ? 'Placing…'
+              : phase === 'WAITING'
+                ? 'Place Bet'
+                : 'Round in progress'}
+        </button>
+      ) : null}
+    </div>
+  )
+}
 
-      {/* Auto cashout input */}
-      <div className="space-y-1">
-        <label htmlFor="auto-cashout" className="block text-sm text-gray-400 font-medium">
-          Auto Cash Out at (optional)
-        </label>
-        <input
-          id="auto-cashout"
-          type="number"
-          min="1.01"
-          step="0.01"
-          value={autoCashOutInput}
-          onChange={e => setAutoCashOutInput(e.target.value)}
-          placeholder="e.g. 2.00"
-          className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-yellow-500 transition-colors"
-          disabled={!!nextRoundBet || (phase === 'WAITING' && !!playerBet?.placed)}
-        />
-      </div>
+function StatusBadge({ slot, phase }: { slot: SlotState; phase: GamePhase }) {
+  const status = slot.bet?.status
+  if (status === 'CASHED_OUT') return <span className="text-xs font-semibold text-green-400">Cashed out</span>
+  if (status === 'LOST') return <span className="text-xs font-semibold text-red-400">Lost</span>
+  if (status === 'PLACED' && phase === 'CRASHED') return <span className="text-xs font-semibold text-red-400">Lost</span>
+  if (status === 'PLACED') return <span className="text-xs font-semibold text-yellow-400">Active</span>
+  return null
+}
 
-      {/* Quick amount buttons */}
-      <div className="flex gap-2">
-        {QUICK_AMOUNTS.map(amount => (
-          <button
-            key={amount}
-            onClick={() => handleQuickAmount(amount)}
-            disabled={!!nextRoundBet || (phase === 'WAITING' && !!playerBet?.placed)}
-            className="flex-1 py-2 text-sm font-medium bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            {amount}
-          </button>
-        ))}
+function BetSummary({
+  slot,
+  phase,
+  currentMultiplier,
+}: {
+  slot: SlotState
+  phase: GamePhase
+  currentMultiplier: number
+}) {
+  const bet = slot.bet!
+  if (bet.status === 'CASHED_OUT' && bet.cashOutMultiplier !== null) {
+    return (
+      <div className="text-sm">
+        <p className="text-green-400 font-semibold">✓ {formatMultiplier(bet.cashOutMultiplier)}</p>
+        <p className="text-green-300 text-xs">Won {formatCredits(bet.payout)}</p>
       </div>
-
-      {/* Possible payout */}
-      {possiblePayout !== null && (
-        <div className="text-center text-sm text-gray-400">
-          Possible payout:{' '}
-          <span className="text-green-400 font-semibold">{formatCredits(Math.floor(possiblePayout * 100) / 100)}</span>
-        </div>
+    )
+  }
+  if (bet.status === 'LOST' || (bet.status === 'PLACED' && phase === 'CRASHED')) {
+    return (
+      <div className="text-sm">
+        <p className="text-red-400 font-semibold">✗ Lost {formatCredits(bet.amount)}</p>
+      </div>
+    )
+  }
+  // PLACED, waiting or running
+  return (
+    <div className="text-sm text-gray-300">
+      Bet: <span className="font-semibold text-white">{formatCredits(bet.amount)}</span>
+      {bet.autoCashOut && <span className="text-gray-400"> · auto @ {formatMultiplier(bet.autoCashOut)}</span>}
+      {phase === 'RUNNING' && (
+        <span className="block text-xs text-gray-400">
+          Now worth {formatCredits(Math.floor(bet.amount * currentMultiplier * 100) / 100)}
+        </span>
       )}
-
-      {/* Action buttons */}
-      <div className="flex gap-3">
-        <button
-          onClick={handleSubmit}
-          disabled={phase === 'WAITING' ? !canPlaceBet : phase === 'RUNNING' ? !canQueue || !!nextRoundBet : true}
-          className="flex-1 py-3 font-bold rounded-xl bg-yellow-500 text-gray-900 hover:bg-yellow-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          aria-label={phase === 'RUNNING' ? 'Queue bet for next round' : 'Place bet'}
-        >
-          {phase === 'RUNNING' ? 'Bet Next Round' : 'Place Bet'}
-        </button>
-
-        <button
-          onClick={onCashOut}
-          disabled={!canCashOut}
-          className="flex-1 py-3 font-bold rounded-xl bg-green-500 text-white hover:bg-green-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          aria-label="Cash out"
-        >
-          Cash Out
-        </button>
-      </div>
     </div>
   )
 }

@@ -1,75 +1,89 @@
-import { useCrashGame } from './hooks/useCrashGame'
+import { useState } from 'react'
+import { useCrashGame, SLOT_IDS } from './hooks/useCrashGame'
+import { useAuth } from './auth/useAuth'
 import { Header } from './components/Header'
 import { GameCanvas } from './components/GameCanvas'
 import { BettingPanel } from './components/BettingPanel'
 import { RoundHistory } from './components/RoundHistory'
-import { PlayerStatus } from './components/PlayerStatus'
+import { AuthModal } from './components/AuthModal'
+import { MyBetsModal } from './components/MyBetsModal'
 
 export default function App() {
+  const { user, status, logout } = useAuth()
+  const authed = status === 'authenticated'
   const {
-    balance,
+    connected,
     phase,
     countdown,
     currentMultiplier,
-    currentRound,
-    playerBet,
-    nextRoundBet,
+    crashPoint,
     roundHistory,
-    betError,
+    balance,
+    slots,
+    actionError,
     placeBet,
-    queueNextRoundBet,
-    cancelNextRoundBet,
     cashOut,
     resetBalance,
+    clearError,
   } = useCrashGame()
+
+  const [showAuth, setShowAuth] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
-      <Header balance={balance} onResetBalance={resetBalance} />
+      <Header
+        authed={authed}
+        email={user?.email ?? null}
+        balance={balance}
+        connected={connected}
+        onLogin={() => setShowAuth(true)}
+        onLogout={logout}
+        onResetBalance={resetBalance}
+        onShowHistory={() => setShowHistory(true)}
+      />
 
-      {/* Main content — padded bottom on mobile for fixed panel */}
-      <main className="flex-1 flex flex-col max-w-2xl mx-auto w-full px-4 py-6 gap-4 pb-64 md:pb-6">
+      <main className="flex-1 flex flex-col max-w-2xl mx-auto w-full px-4 py-6 gap-4">
         <GameCanvas
           phase={phase}
           countdown={countdown}
           currentMultiplier={currentMultiplier}
-          currentRound={currentRound}
+          crashPoint={crashPoint}
         />
-
-        <PlayerStatus phase={phase} playerBet={playerBet} />
 
         <RoundHistory history={roundHistory} />
 
-        {/* Desktop betting panel */}
-        <div className="hidden md:block">
-          <BettingPanel
-            phase={phase}
-            currentMultiplier={currentMultiplier}
-            playerBet={playerBet}
-            nextRoundBet={nextRoundBet}
-            betError={betError}
-            onPlaceBet={placeBet}
-            onQueueNextRoundBet={queueNextRoundBet}
-            onCancelNextRoundBet={cancelNextRoundBet}
-            onCashOut={cashOut}
-          />
+        {actionError && (
+          <div
+            className="flex items-center justify-between rounded-xl border border-red-700 bg-red-950 px-4 py-2 text-sm text-red-300"
+            role="alert"
+          >
+            <span>{actionError}</span>
+            <button onClick={clearError} className="text-red-400 hover:text-red-200" aria-label="Dismiss">
+              ✕
+            </button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {SLOT_IDS.map((slotId) => (
+            <BettingPanel
+              key={slotId}
+              slotId={slotId}
+              phase={phase}
+              currentMultiplier={currentMultiplier}
+              slot={slots[slotId]}
+              authed={authed}
+              onPlaceBet={placeBet}
+              onCashOut={cashOut}
+              onRequireLogin={() => setShowAuth(true)}
+            />
+          ))}
         </div>
       </main>
 
-      {/* Mobile fixed bottom panel */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 p-4">
-        <BettingPanel
-          phase={phase}
-          currentMultiplier={currentMultiplier}
-          playerBet={playerBet}
-          nextRoundBet={nextRoundBet}
-          betError={betError}
-          onPlaceBet={placeBet}
-          onQueueNextRoundBet={queueNextRoundBet}
-          onCancelNextRoundBet={cancelNextRoundBet}
-          onCashOut={cashOut}
-        />
-      </div>
+      {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+      {showHistory && <MyBetsModal onClose={() => setShowHistory(false)} />}
     </div>
   )
 }

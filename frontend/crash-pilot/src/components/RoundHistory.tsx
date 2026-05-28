@@ -1,8 +1,8 @@
-import type { Round } from '../types/game'
+import type { RoundSummary } from '../services/types'
 import { formatMultiplier } from '../utils/format'
 
 interface RoundHistoryProps {
-  history: Round[]
+  history: RoundSummary[]
 }
 
 function pillClass(crashPoint: number): string {

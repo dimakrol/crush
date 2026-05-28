@@ -33,7 +33,7 @@ docker compose up -d   # mongo:7 + redis:7
 
 **Cross-cutting:**
 - `src/game/` — `RoundEngine` (`OnModuleInit`) drives the WAITING → RUNNING → CRASHED loop using a `while(true)` async cycle; crash point = `Math.max(1.01, 0.99/Math.random())`; multiplier = `e^(0.06*t)` ticked every 100 ms via `setInterval`
-- `src/socket/` — `GameGateway` authenticates on connect via JWT, emits to rooms named by `userId` for private events, uses `forwardRef` to break circular dependency with `BetsModule`
+- `src/socket/` — `GameGateway` allows **guest connections** (no token) so spectators receive `round:*` broadcasts; a valid handshake token, or a mid-session `authenticate` message, joins the `userId` room for private events. `bet:place`/`bet:cashout` reject when `socket.userId` is absent. Uses `forwardRef` to break the circular dependency with `BetsModule`
 - `src/shared/errors/` — `AppError(statusCode, errorCode, message)` + `GlobalExceptionFilter`
 - `src/shared/pipes/` — `ZodValidationPipe` wraps Zod schemas for NestJS `@UsePipes`
 - `src/shared/guards/` — `JwtAuthGuard` extends request with `req.userId`
