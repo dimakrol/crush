@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useCrashGame, SLOT_IDS } from './hooks/useCrashGame'
 import { useThrottledValue } from './hooks/useThrottledValue'
 import { useAuth } from './auth/useAuth'
+import { useGameSounds } from './audio/useGameSounds'
+import { useMuteToggle } from './audio/useMuteToggle'
 import { Header } from './components/Header'
 import { GameCanvas } from './components/GameCanvas'
 import { BettingPanel } from './components/BettingPanel'
@@ -36,6 +38,12 @@ export default function App() {
   // Tick that at 10 Hz instead (matching the server's own multiplier cadence).
   const panelMultiplier = useThrottledValue(currentMultiplier, 100)
 
+  // Engine sound + crash boom, driven off phase transitions. The getter closes
+  // over the latest currentMultiplier on each render — the hook re-syncs it via
+  // a ref so the audio engine always polls the live value.
+  useGameSounds(phase, () => currentMultiplier)
+  const { muted, toggle: toggleMute } = useMuteToggle()
+
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
       <Header
@@ -43,10 +51,12 @@ export default function App() {
         email={user?.email ?? null}
         balance={balance}
         connected={connected}
+        muted={muted}
         onLogin={() => setShowAuth(true)}
         onLogout={logout}
         onResetBalance={resetBalance}
         onShowHistory={() => setShowHistory(true)}
+        onToggleMute={toggleMute}
       />
 
       <main className="flex-1 flex flex-col max-w-2xl mx-auto w-full px-4 py-6 gap-4">

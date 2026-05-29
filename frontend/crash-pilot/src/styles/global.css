@@ -4,6 +4,9 @@
   --animate-crash-shake: crash-shake 0.4s ease-in-out;
   --animate-crash-flash: crash-flash 0.4s ease-in-out;
   --animate-ping-once: ping-once 0.5s ease-out forwards;
+  --animate-grid-scroll: grid-scroll 4s linear infinite;
+  --animate-fireball: fireball 0.5s ease-out forwards;
+  --animate-flash-burst: flash-burst 0.15s ease-out forwards;
 }
 
 @keyframes crash-shake {
@@ -23,6 +26,36 @@
 @keyframes ping-once {
   0% { transform: scale(0.5); opacity: 1; }
   100% { transform: scale(1.5); opacity: 0; }
+}
+
+/* Background grid pans right-to-left during RUNNING. The pattern's tile is 40px,
+   so translating by -40px loops seamlessly. */
+@keyframes grid-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-40px); }
+}
+
+/* Debris particle: animates from origin to (--end-x, --end-y) over its lifetime.
+   The browser interpolates the resolved transform matrices at each keyframe edge,
+   so no @property registration is required for the custom properties. */
+@keyframes debris-fly {
+  0%   { transform: translate(0, 0); opacity: 1; }
+  20%  { opacity: 1; }
+  100% { transform: translate(var(--end-x, 0), var(--end-y, 0)); opacity: 0; }
+}
+
+/* Fireball grows from a hot core to ~80px and fades. Combined with debris
+   particles drawn on top, this replaces the lone 💥 emoji. */
+@keyframes fireball {
+  0% { transform: translate(-50%, -50%) scale(0.2); opacity: 0.95; }
+  60% { transform: translate(-50%, -50%) scale(1); opacity: 0.7; }
+  100% { transform: translate(-50%, -50%) scale(1.2); opacity: 0; }
+}
+
+/* White-hot flash that fires once at crash entry, before the fireball expands. */
+@keyframes flash-burst {
+  0% { transform: translate(-50%, -50%) scale(0.3); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
 }
 
 * {
