@@ -1,4 +1,4 @@
-import { calculatePayout, isValidBetAmount } from '../../src/shared/utils/money'
+import { calculatePayout, isValidBetAmount } from '@/shared/utils/money'
 
 describe('calculatePayout', () => {
   it('multiplies amount by multiplier', () => {

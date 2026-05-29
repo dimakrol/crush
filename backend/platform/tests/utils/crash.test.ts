@@ -1,4 +1,4 @@
-import { generateCrashPoint } from '../../src/shared/utils/crash'
+import { generateCrashPoint } from '@/shared/utils/crash'
 
 describe('generateCrashPoint', () => {
   it('always returns a value >= 1.01', () => {
