@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useCrashGame, SLOT_IDS } from './hooks/useCrashGame'
+import { useThrottledValue } from './hooks/useThrottledValue'
 import { useAuth } from './auth/useAuth'
 import { Header } from './components/Header'
 import { GameCanvas } from './components/GameCanvas'
@@ -29,6 +30,11 @@ export default function App() {
 
   const [showAuth, setShowAuth] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+
+  // The canvas's centerpiece needs 60 Hz to feel smooth; the betting panels
+  // display a derived credit amount in small text, which flickers at 60 Hz.
+  // Tick that at 10 Hz instead (matching the server's own multiplier cadence).
+  const panelMultiplier = useThrottledValue(currentMultiplier, 100)
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
@@ -71,7 +77,7 @@ export default function App() {
               key={slotId}
               slotId={slotId}
               phase={phase}
-              currentMultiplier={currentMultiplier}
+              currentMultiplier={panelMultiplier}
               slot={slots[slotId]}
               authed={authed}
               onPlaceBet={placeBet}

@@ -100,7 +100,7 @@ export function BettingPanel({
         <button
           onClick={() => onCashOut(slotId)}
           disabled={pending === 'cashing'}
-          className="w-full py-3 font-bold rounded-xl bg-green-500 text-white hover:bg-green-400 disabled:opacity-50 transition-colors"
+          className="w-full py-3 font-bold rounded-xl bg-green-500 text-white hover:bg-green-400 disabled:opacity-50 transition-colors tabular-nums"
         >
           {pending === 'cashing'
             ? 'Cashing…'
@@ -165,7 +165,7 @@ function BetSummary({
       Bet: <span className="font-semibold text-white">{formatCredits(bet.amount)}</span>
       {bet.autoCashOut && <span className="text-gray-400"> · auto @ {formatMultiplier(bet.autoCashOut)}</span>}
       {phase === 'RUNNING' && (
-        <span className="block text-xs text-gray-400">
+        <span className="block text-xs text-gray-400 tabular-nums">
           Now worth {formatCredits(Math.floor(bet.amount * currentMultiplier * 100) / 100)}
         </span>
       )}
