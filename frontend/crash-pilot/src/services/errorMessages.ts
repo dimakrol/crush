@@ -10,6 +10,7 @@ const MESSAGES: Record<string, string> = {
   BET_ALREADY_EXISTS: 'You already have a bet on this slot.',
   BET_NOT_FOUND: 'That bet could not be found.',
   BET_ALREADY_RESOLVED: 'That bet was already cashed out.',
+  BET_QUEUE_NOT_ALLOWED: 'Can’t queue a bet for that slot right now.',
   INVALID_AUTO_CASHOUT: 'Auto cash-out must be greater than 1.00.',
   UNAUTHORIZED: 'Please log in to continue.',
   VALIDATION_ERROR: 'Please check your input and try again.',

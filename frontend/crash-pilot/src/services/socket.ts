@@ -17,8 +17,13 @@ import type {
   RoundCrashedEvent,
   BetCashedOutEvent,
   BetLostEvent,
+  BetQueuedEvent,
+  BetQueueCanceledEvent,
+  BetQueuePlacedEvent,
+  BetQueueDroppedEvent,
   WalletUpdatedEvent,
   SocketErrorEvent,
+  BetSlotId,
 } from './types'
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:4000'
@@ -33,6 +38,11 @@ export interface ServerEvents {
   'bet:placed': BetCashedOutEvent // { result } shape from socket bet:place; bet field present
   'bet:cashedOut': BetCashedOutEvent
   'bet:lost': BetLostEvent
+  'bet:queued': BetQueuedEvent
+  'bet:queueCanceled': BetQueueCanceledEvent
+  'bet:queuePlaced': BetQueuePlacedEvent
+  'bet:queueDropped': BetQueueDroppedEvent
+  'session:superseded': void
   'wallet:updated': WalletUpdatedEvent
   error: SocketErrorEvent
 }
@@ -75,4 +85,12 @@ export function on<E extends keyof ServerEvents>(
 
 export function emitCashout(betId: string): void {
   getSocket().emit('bet:cashout', { betId })
+}
+
+export function emitQueueNext(slotId: BetSlotId, amount: number, autoCashOut: number | null): void {
+  getSocket().emit('bet:queueNext', { slotId, amount, autoCashOut })
+}
+
+export function emitCancelNext(slotId: BetSlotId): void {
+  getSocket().emit('bet:cancelNext', { slotId })
 }

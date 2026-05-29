@@ -1,6 +1,6 @@
-import { Module, forwardRef } from '@nestjs/common'
-import { GameGateway } from './game.gateway'
-import { BetsModule } from '../modules/bets/bets.module'
+import { Module, forwardRef } from '@nestjs/common';
+import { GameGateway } from './game.gateway';
+import { BetsModule } from '@/modules/bets/bets.module';
 
 @Module({
   imports: [forwardRef(() => BetsModule)],

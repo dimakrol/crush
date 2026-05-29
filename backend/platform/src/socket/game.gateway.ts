@@ -10,12 +10,12 @@ import {
 import { Server, Socket } from 'socket.io'
 import jwt from 'jsonwebtoken'
 import { forwardRef, Inject } from '@nestjs/common'
-import { env } from '../config/env'
-import { AppError } from '../shared/errors/AppError'
-import { ErrorCode } from '../shared/errors/error-codes'
-import { BetService } from '../modules/bets/bet.service'
-import { BetSlotId } from '../modules/bets/bet.types'
-import { logger } from '../shared/utils/logger'
+import { env } from '@/config/env'
+import { AppError } from '@/shared/errors/AppError'
+import { ErrorCode } from '@/shared/errors/error-codes'
+import { BetService } from '@/modules/bets/bet.service'
+import { BetSlotId } from '@/modules/bets/bet.types'
+import { logger } from '@/shared/utils/logger'
 
 interface AuthSocket extends Socket {
   userId?: string
@@ -24,6 +24,10 @@ interface AuthSocket extends Socket {
 @WebSocketGateway({ cors: { origin: env.CORS_ORIGIN } })
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server
+
+  // One active connection per game user. A new authenticated socket boots the
+  // previous one (single server instance, so an in-memory map suffices).
+  private readonly userSockets = new Map<string, string>()
 
   constructor(
     @Inject(forwardRef(() => BetService))
@@ -38,8 +42,15 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     else logger.info('Guest socket connected', { socketId: socket.id })
   }
 
-  handleDisconnect(socket: AuthSocket): void {
+  async handleDisconnect(socket: AuthSocket): Promise<void> {
     logger.info('Socket disconnected', { userId: socket.userId, socketId: socket.id })
+    // Only the user's *currently registered* socket owns the session: a socket
+    // that was already booted (superseded) must not clear the new socket's state.
+    if (socket.userId && this.userSockets.get(socket.userId) === socket.id) {
+      this.userSockets.delete(socket.userId)
+      // Connection-scoped queue: losing the connection cancels any next-round bet.
+      await this.betService.cancelAllNextForUser(socket.userId)
+    }
   }
 
   // Verify a token and join the userId room. Invalid tokens leave the socket as a
@@ -49,12 +60,28 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as { sub: string }
       socket.userId = payload.sub
       await socket.join(socket.userId)
+      await this.supersedePreviousSocket(socket)
+      this.userSockets.set(socket.userId, socket.id)
       logger.info('Socket authenticated', { userId: socket.userId, socketId: socket.id })
       return true
     } catch {
       socket.emit('error', { code: ErrorCode.UNAUTHORIZED, message: 'Invalid token' })
       return false
     }
+  }
+
+  // Disconnect any prior socket for this user and cancel the queue it owned, so
+  // opening a new tab takes over the single allowed session.
+  private async supersedePreviousSocket(socket: AuthSocket): Promise<void> {
+    const userId = socket.userId!
+    const prevId = this.userSockets.get(userId)
+    if (!prevId || prevId === socket.id) return
+    const prev = this.server.sockets.sockets.get(prevId)
+    if (prev) {
+      prev.emit('session:superseded')
+      prev.disconnect(true)
+    }
+    await this.betService.cancelAllNextForUser(userId)
   }
 
   // Mid-session login: authenticate an already-connected guest socket without a reconnect.
@@ -112,5 +139,37 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const e = err as AppError
       socket.emit('error', { code: e.code ?? ErrorCode.INTERNAL_SERVER_ERROR, message: e.message })
     }
+  }
+
+  // Queue a bet for the next round (placed by RoundEngine at the next WAITING).
+  @SubscribeMessage('bet:queueNext')
+  async handleQueueNext(
+    @ConnectedSocket() socket: AuthSocket,
+    @MessageBody() data: { slotId: BetSlotId; amount: number; autoCashOut?: number | null },
+  ): Promise<void> {
+    if (!socket.userId) {
+      socket.emit('error', { code: ErrorCode.UNAUTHORIZED, message: 'Log in to queue a bet' })
+      return
+    }
+    try {
+      const queued = await this.betService.queueNextBet(socket.userId, data.slotId, data.amount, data.autoCashOut ?? null)
+      socket.emit('bet:queued', queued)
+    } catch (err) {
+      const e = err as AppError
+      socket.emit('error', { code: e.code ?? ErrorCode.INTERNAL_SERVER_ERROR, message: e.message })
+    }
+  }
+
+  @SubscribeMessage('bet:cancelNext')
+  async handleCancelNext(
+    @ConnectedSocket() socket: AuthSocket,
+    @MessageBody() data: { slotId: BetSlotId },
+  ): Promise<void> {
+    if (!socket.userId) {
+      socket.emit('error', { code: ErrorCode.UNAUTHORIZED, message: 'Log in to cancel a queued bet' })
+      return
+    }
+    const canceled = await this.betService.cancelNextBet(socket.userId, data.slotId)
+    socket.emit('bet:queueCanceled', canceled)
   }
 }

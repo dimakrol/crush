@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/useAuth'
-import { on as onSocket, getSocket, emitCashout } from '../services/socket'
+import { on as onSocket, getSocket, emitCashout, emitQueueNext, emitCancelNext } from '../services/socket'
 import * as betApi from '../services/betApi'
 import * as walletApi from '../services/walletApi'
 import { getRecentRounds } from '../services/historyApi'
@@ -13,18 +13,25 @@ const GROWTH_RATE = 0.06
 const HISTORY_LIMIT = 20
 const SLOT_IDS: BetSlotId[] = [1, 2]
 
-export type SlotPending = 'placing' | 'cashing' | null
+export type SlotPending = 'placing' | 'cashing' | 'queuing' | 'canceling' | null
+
+// A one-shot intent to bet on the next round, mirrored from the server's queue.
+export interface QueuedBet {
+  amount: number
+  autoCashOut: number | null
+}
 
 export interface SlotState {
   bet: Bet | null
+  queued: QueuedBet | null
   pending: SlotPending
 }
 
 type Slots = Record<BetSlotId, SlotState>
 
 const EMPTY_SLOTS: Slots = {
-  1: { bet: null, pending: null },
-  2: { bet: null, pending: null },
+  1: { bet: null, queued: null, pending: null },
+  2: { bet: null, queued: null, pending: null },
 }
 
 export interface UseCrashGameReturn {
@@ -40,6 +47,8 @@ export interface UseCrashGameReturn {
   actionError: string | null
   placeBet: (slotId: BetSlotId, amount: number, autoCashOut?: number | null) => Promise<void>
   cashOut: (slotId: BetSlotId) => void
+  queueNext: (slotId: BetSlotId, amount: number, autoCashOut?: number | null) => void
+  cancelNext: (slotId: BetSlotId) => void
   resetBalance: () => Promise<void>
   clearError: () => void
 }
@@ -178,8 +187,13 @@ export function useCrashGame(): UseCrashGameReturn {
       const [bal, active] = await Promise.all([walletApi.getBalance(), betApi.getActiveBets()])
       setBalance(bal)
       setSlots(() => {
-        const next: Slots = { 1: { bet: null, pending: null }, 2: { bet: null, pending: null } }
-        for (const bet of active) next[bet.slotId] = { bet, pending: null }
+        const next: Slots = {
+          1: { bet: null, queued: null, pending: null },
+          2: { bet: null, queued: null, pending: null },
+        }
+        // The queue is server-ephemeral and tied to the old socket; a reconnect
+        // is a fresh socket, so any prior queued intent is already gone.
+        for (const bet of active) next[bet.slotId] = { bet, queued: null, pending: null }
         return next
       })
     } catch {
@@ -214,9 +228,31 @@ export function useCrashGame(): UseCrashGameReturn {
         setSlots((prev) => ({
           ...prev,
           [slotId]: prev[slotId].bet
-            ? { bet: { ...prev[slotId].bet!, status: 'LOST' }, pending: null }
+            ? { ...prev[slotId], bet: { ...prev[slotId].bet!, status: 'LOST' }, pending: null }
             : prev[slotId],
         }))
+      }),
+      // ── Next-round queue ──
+      onSocket('bet:queued', (e) => {
+        setSlots((prev) => ({
+          ...prev,
+          [e.slotId]: { ...prev[e.slotId], queued: { amount: e.amount, autoCashOut: e.autoCashOut }, pending: null },
+        }))
+      }),
+      onSocket('bet:queueCanceled', (e) => {
+        setSlots((prev) => ({ ...prev, [e.slotId]: { ...prev[e.slotId], queued: null, pending: null } }))
+      }),
+      onSocket('bet:queuePlaced', (e) => {
+        // The queued intent became a live bet at the start of WAITING.
+        setSlots((prev) => ({ ...prev, [e.bet.slotId]: { bet: e.bet, queued: null, pending: null } }))
+        setBalance(e.balance)
+      }),
+      onSocket('bet:queueDropped', (e) => {
+        setSlots((prev) => ({ ...prev, [e.slotId]: { ...prev[e.slotId], queued: null, pending: null } }))
+        setActionError(friendlyError(e))
+      }),
+      onSocket('session:superseded', () => {
+        setActionError('This session was opened in another tab.')
       }),
       onSocket('error', (e) => setActionError(friendlyError(e))),
     ]
@@ -251,6 +287,18 @@ export function useCrashGame(): UseCrashGameReturn {
     })
   }, [])
 
+  // Queue a bet for the next round (no optimistic state — wait for bet:queued).
+  const queueNext = useCallback((slotId: BetSlotId, amount: number, autoCashOut: number | null = null) => {
+    setActionError(null)
+    setSlots((prev) => ({ ...prev, [slotId]: { ...prev[slotId], pending: 'queuing' } }))
+    emitQueueNext(slotId, amount, autoCashOut)
+  }, [])
+
+  const cancelNext = useCallback((slotId: BetSlotId) => {
+    setSlots((prev) => ({ ...prev, [slotId]: { ...prev[slotId], pending: 'canceling' } }))
+    emitCancelNext(slotId)
+  }, [])
+
   const resetBalance = useCallback(async () => {
     setActionError(null)
     try {
@@ -279,6 +327,8 @@ export function useCrashGame(): UseCrashGameReturn {
     actionError,
     placeBet,
     cashOut,
+    queueNext,
+    cancelNext,
     resetBalance,
     clearError,
   }

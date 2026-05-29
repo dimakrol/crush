@@ -1,11 +1,26 @@
 import { Inject, Injectable } from '@nestjs/common'
-import { getRedis } from '../../config/redis'
-import { AppError } from '../../shared/errors/AppError'
-import { ErrorCode } from '../../shared/errors/error-codes'
-import { calculatePayout, isValidBetAmount } from '../../shared/utils/money'
+import { getRedis } from '@/config/redis'
+import { AppError } from '@/shared/errors/AppError'
+import { ErrorCode } from '@/shared/errors/error-codes'
+import { calculatePayout, isValidBetAmount } from '@/shared/utils/money'
 import { WalletService } from '../wallet/wallet.service'
 import { BET_REPOSITORY, IBetRepository } from './bet.repository.interface'
 import { Bet, BetSlotId } from './bet.types'
+
+// Connection-scoped, one-shot intent to bet on the *next* round, stored in the
+// Redis hash `queue:next` under the field `{userId}:{slotId}`. There is one
+// socket per user (the gateway enforces it), so userId keying is unambiguous.
+const QUEUE_KEY = 'queue:next'
+const queueField = (userId: string, slotId: BetSlotId) => `${userId}:${slotId}`
+
+interface QueuedIntent {
+  amount: number
+  autoCashOut: number | null
+}
+
+export type QueueOutcome =
+  | { ok: true; userId: string; slotId: BetSlotId; bet: Bet; balance: number }
+  | { ok: false; userId: string; slotId: BetSlotId; code: string }
 
 @Injectable()
 export class BetService {
@@ -100,5 +115,70 @@ export class BetService {
 
   async getUserBalance(userId: string): Promise<number> {
     return this.walletService.getBalance(userId)
+  }
+
+  // ── Next-round queue (pure intent; no money moves until placement) ────────
+
+  // Queue a bet for the next round. Allowed only mid-round (RUNNING/CRASHED) —
+  // during WAITING the user just bets normally. Per-slot: rejects if the slot
+  // already holds a bet this round, matching the unique (round,user,slot) index.
+  async queueNextBet(userId: string, slotId: BetSlotId, amount: number, autoCashOut: number | null): Promise<QueuedIntent & { slotId: BetSlotId }> {
+    const phase = await getRedis().get('game:phase')
+    if (phase !== 'RUNNING' && phase !== 'CRASHED') {
+      throw new AppError(400, ErrorCode.BET_QUEUE_NOT_ALLOWED, 'Next-round bets can only be queued while a round is in progress')
+    }
+    if (!isValidBetAmount(amount)) throw new AppError(400, ErrorCode.VALIDATION_ERROR, 'Invalid bet amount')
+    if (autoCashOut !== null && autoCashOut <= 1) throw new AppError(400, ErrorCode.INVALID_AUTO_CASHOUT, 'Auto cashout must be greater than 1.00')
+
+    const roundId = await getRedis().get('game:currentRound')
+    if (roundId) {
+      const existing = await this.betRepo.findBySlot(roundId, userId, slotId)
+      if (existing) throw new AppError(409, ErrorCode.BET_QUEUE_NOT_ALLOWED, `Slot ${slotId} already has a bet this round`)
+    }
+
+    await getRedis().hset(QUEUE_KEY, queueField(userId, slotId), JSON.stringify({ amount, autoCashOut } satisfies QueuedIntent))
+    return { slotId, amount, autoCashOut }
+  }
+
+  async cancelNextBet(userId: string, slotId: BetSlotId): Promise<{ slotId: BetSlotId }> {
+    await getRedis().hdel(QUEUE_KEY, queueField(userId, slotId))
+    return { slotId }
+  }
+
+  // Drop all of a user's queued intents — used on socket disconnect.
+  async cancelAllNextForUser(userId: string): Promise<void> {
+    await getRedis().hdel(QUEUE_KEY, queueField(userId, 1), queueField(userId, 2))
+  }
+
+  // Consume the entire queue exactly once at the start of a WAITING phase and
+  // place each intent through the normal placeBet flow (deduct happens here).
+  // The hash is cleared up front so the intents are strictly one-shot.
+  async consumeNextRoundQueue(): Promise<QueueOutcome[]> {
+    const redis = getRedis()
+    const all = await redis.hgetall(QUEUE_KEY)
+    const fields = Object.keys(all)
+    if (fields.length === 0) return []
+    await redis.del(QUEUE_KEY)
+
+    const outcomes: QueueOutcome[] = []
+    for (const field of fields) {
+      const sep = field.lastIndexOf(':')
+      const userId = field.slice(0, sep)
+      const slotId = Number(field.slice(sep + 1)) as BetSlotId
+      let intent: QueuedIntent
+      try {
+        intent = JSON.parse(all[field]) as QueuedIntent
+      } catch {
+        continue
+      }
+      try {
+        const { bet, balance } = await this.placeBet(userId, slotId, intent.amount, intent.autoCashOut)
+        outcomes.push({ ok: true, userId, slotId, bet, balance })
+      } catch (err) {
+        const code = (err as AppError).code ?? ErrorCode.INTERNAL_SERVER_ERROR
+        outcomes.push({ ok: false, userId, slotId, code })
+      }
+    }
+    return outcomes
   }
 }

@@ -1,12 +1,12 @@
 import { Injectable, OnModuleInit, Inject } from '@nestjs/common'
-import { env } from '../config/env'
-import { getRedis } from '../config/redis'
-import { generateCrashPoint } from '../shared/utils/crash'
-import { logger } from '../shared/utils/logger'
-import { ROUND_REPOSITORY, IRoundRepository } from '../modules/rounds/round.repository.interface'
-import { Round } from '../modules/rounds/round.types'
-import { BetService } from '../modules/bets/bet.service'
-import { GameGateway } from '../socket/game.gateway'
+import { env } from '@/config/env'
+import { getRedis } from '@/config/redis'
+import { generateCrashPoint } from '@/shared/utils/crash'
+import { logger } from '@/shared/utils/logger'
+import { ROUND_REPOSITORY, IRoundRepository } from '@/modules/rounds/round.repository.interface'
+import { Round } from '@/modules/rounds/round.types'
+import { BetService } from '@/modules/bets/bet.service'
+import { GameGateway } from '@/socket/game.gateway'
 
 @Injectable()
 export class RoundEngine implements OnModuleInit {
@@ -47,6 +47,19 @@ export class RoundEngine implements OnModuleInit {
 
     logger.info('Round WAITING', { roundId: round.id })
     this.gateway.emitToAll('round:waiting', { roundId: round.id, phase: 'WAITING', countdown: env.ROUND_WAITING_SECONDS })
+
+    // Place one-shot next-round bets queued during the previous round. Done after
+    // the round:waiting broadcast so clients clear last round's slots first, then
+    // receive the placement result. Emitted per-user, mirroring the cashout path.
+    const outcomes = await this.betService.consumeNextRoundQueue()
+    for (const outcome of outcomes) {
+      if (outcome.ok) {
+        this.gateway.emitToUser(outcome.userId, 'bet:queuePlaced', { bet: outcome.bet, balance: outcome.balance })
+        this.gateway.emitToUser(outcome.userId, 'wallet:updated', { balance: outcome.balance })
+      } else {
+        this.gateway.emitToUser(outcome.userId, 'bet:queueDropped', { slotId: outcome.slotId, code: outcome.code })
+      }
+    }
 
     for (let i = env.ROUND_WAITING_SECONDS; i > 0; i--) {
       await sleep(1000)

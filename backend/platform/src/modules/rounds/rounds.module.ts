@@ -1,6 +1,6 @@
-import { Module } from '@nestjs/common'
-import { MongoRoundRepository } from './round.repository.mongo'
-import { ROUND_REPOSITORY } from './round.repository.interface'
+import { Module } from '@nestjs/common';
+import { MongoRoundRepository } from './round.repository.mongo';
+import { ROUND_REPOSITORY } from './round.repository.interface';
 
 @Module({
   providers: [{ provide: ROUND_REPOSITORY, useClass: MongoRoundRepository }],

@@ -1,4 +1,4 @@
-import { ErrorCode } from './error-codes'
+import { ErrorCode } from './error-codes';
 
 export class AppError extends Error {
   constructor(
@@ -6,7 +6,7 @@ export class AppError extends Error {
     public readonly code: ErrorCode,
     message: string,
   ) {
-    super(message)
-    this.name = 'AppError'
+    super(message);
+    this.name = 'AppError';
   }
 }

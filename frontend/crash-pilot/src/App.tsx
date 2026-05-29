@@ -26,6 +26,8 @@ export default function App() {
     actionError,
     placeBet,
     cashOut,
+    queueNext,
+    cancelNext,
     resetBalance,
     clearError,
   } = useCrashGame()
@@ -92,6 +94,8 @@ export default function App() {
               authed={authed}
               onPlaceBet={placeBet}
               onCashOut={cashOut}
+              onQueueNext={queueNext}
+              onCancelNext={cancelNext}
               onRequireLogin={() => setShowAuth(true)}
             />
           ))}
