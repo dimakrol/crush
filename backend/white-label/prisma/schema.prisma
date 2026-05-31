@@ -1,0 +1,90 @@
+// White-label casino data model.
+// Money is stored as integer minor units (BigInt). The ledger (Transaction) is
+// append-only; idempotency is enforced by the unique `txRef`.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Player {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  displayName  String
+  createdAt    DateTime @default(now())
+
+  wallets  Wallet[]
+  sessions GameSession[]
+
+  @@map("players")
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  playerId  String
+  currency  String
+  balance   BigInt   @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  player       Player        @relation(fields: [playerId], references: [id])
+  transactions Transaction[]
+
+  @@unique([playerId, currency])
+  @@map("wallets")
+}
+
+model Transaction {
+  id           String          @id @default(uuid())
+  walletId     String
+  type         TransactionType
+  amount       BigInt
+  txRef        String          @unique
+  refTxRef     String?
+  roundId      String?
+  slotId       Int?
+  gameId       String?
+  balanceAfter BigInt
+  createdAt    DateTime        @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([refTxRef])
+  @@map("transactions")
+}
+
+model GameSession {
+  id          String        @id @default(uuid())
+  launchToken String        @unique
+  playerId    String
+  currency    String
+  gameId      String
+  status      SessionStatus @default(PENDING)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime      @default(now())
+
+  player Player @relation(fields: [playerId], references: [id])
+
+  @@index([playerId])
+  @@map("game_sessions")
+}
+
+enum TransactionType {
+  DEBIT
+  CREDIT
+  ROLLBACK
+}
+
+enum SessionStatus {
+  PENDING
+  ACTIVE
+  ENDED
+  EXPIRED
+}
