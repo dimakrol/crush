@@ -21,5 +21,5 @@ COPY . .
 
 EXPOSE 4000
 
-# Apply committed migrations, then start in watch mode.
-CMD ["sh", "-c", "npx prisma migrate deploy && npm run dev"]
+# Apply committed migrations, seed demo players (idempotent), then watch.
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run seed && npm run dev"]

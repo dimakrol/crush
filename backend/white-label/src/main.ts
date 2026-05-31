@@ -14,11 +14,19 @@ import { logger } from './shared/utils/logger';
 };
 
 async function bootstrap() {
+  // rawBody: true exposes req.rawBody (Buffer) for HMAC signature verification.
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
+    rawBody: true,
   });
 
-  app.use(helmet());
+  // CSP/COEP are disabled: the lobby is server-rendered HTML with an inline
+  // script and embeds the game frontend (a different origin) in an iframe. This
+  // is a simulator; framing permission for the game lives on the frontend (CSP
+  // frame-ancestors), set in the platform/frontend phase.
+  app.use(
+    helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }),
+  );
   app.enableCors({ origin: env.CORS_ORIGIN });
 
   await app.listen(env.PORT);
