@@ -19,6 +19,7 @@ import { logger } from '@/shared/utils/logger'
 
 interface AuthSocket extends Socket {
   userId?: string
+  currency?: string
 }
 
 @WebSocketGateway({ cors: { origin: env.CORS_ORIGIN } })
@@ -57,8 +58,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // guest (it stays connected) rather than disconnecting it.
   private async authenticateSocket(socket: AuthSocket, token: string): Promise<boolean> {
     try {
-      const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as { sub: string }
+      const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as { sub: string; currency: string }
       socket.userId = payload.sub
+      socket.currency = payload.currency
       await socket.join(socket.userId)
       await this.supersedePreviousSocket(socket)
       this.userSockets.set(socket.userId, socket.id)
@@ -112,7 +114,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return
     }
     try {
-      const result = await this.betService.placeBet(socket.userId, data.slotId, data.amount, data.autoCashOut ?? null)
+      const result = await this.betService.placeBet(socket.userId, socket.currency!, data.slotId, data.amount, data.autoCashOut ?? null)
       socket.emit('bet:placed', result)
     } catch (err) {
       const e = err as AppError
@@ -152,7 +154,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return
     }
     try {
-      const queued = await this.betService.queueNextBet(socket.userId, data.slotId, data.amount, data.autoCashOut ?? null)
+      const queued = await this.betService.queueNextBet(socket.userId, socket.currency!, data.slotId, data.amount, data.autoCashOut ?? null)
       socket.emit('bet:queued', queued)
     } catch (err) {
       const e = err as AppError

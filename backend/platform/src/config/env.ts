@@ -22,6 +22,13 @@ const envSchema = z.object({
   ROUND_CRASHED_SECONDS: z.coerce.number().default(3),
   ROUND_GROWTH_RATE: z.coerce.number().default(0.06),
   INITIAL_DEMO_BALANCE: z.coerce.number().default(1000),
+
+  // White-label (operator) seamless-wallet API. The platform is a thin client:
+  // money + identity live in the white-label, reached server-to-server over HMAC.
+  WALLET_API_URL: z.string().min(1).default('http://localhost:4200'),
+  OPERATOR_API_KEY: z.string().min(1).default('dev-operator-key'),
+  OPERATOR_SECRET: z.string().min(1).default('dev-operator-secret-change-me'),
+  GAME_ID: z.string().default('crash-pilot'),
 });
 
 const result = envSchema.safeParse(process.env);

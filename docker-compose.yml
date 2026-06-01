@@ -80,6 +80,12 @@ services:
       MONGODB_URI: mongodb://mongo:27017/crash_pilot
       REDIS_URL: redis://redis:6379
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-5274}
+      # Seamless-wallet client: reach the white-label over the container network.
+      # OPERATOR_* must match the white-label's values (same HMAC secret).
+      WALLET_API_URL: http://white-label:4000
+      OPERATOR_API_KEY: ${OPERATOR_API_KEY:-dev-operator-key}
+      OPERATOR_SECRET: ${OPERATOR_SECRET:-dev-operator-secret-change-me}
+      GAME_ID: crash-pilot
     ports:
       - "${BACKEND_PORT:-4100}:4000"
     volumes:
@@ -90,6 +96,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      white-label:
+        condition: service_started
     restart: unless-stopped
 
   frontend:

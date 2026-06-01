@@ -28,7 +28,8 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
       .collection('bets')
       .insertOne({
         ...data,
-        userId: new ObjectId(data.userId),
+        // userId is the white-label player UUID — stored as a plain string, not
+        // a Mongo ObjectId. roundId is an internal Mongo round id.
         roundId: new ObjectId(data.roundId),
       });
     return { id: result.insertedId.toHexString(), ...data };
@@ -43,7 +44,7 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
       .collection('bets')
       .findOne({
         roundId: new ObjectId(roundId),
-        userId: new ObjectId(userId),
+        userId,
         slotId,
       });
     return doc ? this.toBet(doc) : null;
@@ -61,7 +62,7 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
     const docs = await getDb()
       .collection('bets')
       .find({
-        userId: new ObjectId(userId),
+        userId,
         roundId: new ObjectId(roundId),
         status: 'PLACED',
       })
@@ -74,7 +75,7 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
     limit: number,
     cursor?: string,
   ): Promise<{ bets: Bet[]; nextCursor: string | null }> {
-    const query: Record<string, unknown> = { userId: new ObjectId(userId) };
+    const query: Record<string, unknown> = { userId };
     if (cursor) query.placedAt = { $lt: new Date(cursor) };
     const docs = await getDb()
       .collection('bets')
@@ -135,7 +136,7 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
       .collection('bets')
       .updateMany(
         {
-          userId: new ObjectId(userId),
+          userId,
           roundId: new ObjectId(roundId),
           status: 'PLACED',
         },
@@ -143,10 +144,37 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
       );
   }
 
+  async findAllPlaced(): Promise<Bet[]> {
+    const docs = await getDb()
+      .collection('bets')
+      .find({ status: 'PLACED' })
+      .toArray();
+    return docs.map((d) => this.toBet(d));
+  }
+
+  async markCanceled(betId: string): Promise<void> {
+    await getDb()
+      .collection('bets')
+      .updateOne(
+        { _id: new ObjectId(betId), status: 'PLACED' },
+        { $set: { status: 'CANCELED', resolvedAt: new Date() } },
+      );
+  }
+
+  async markSettlementPending(betId: string): Promise<void> {
+    await getDb()
+      .collection('bets')
+      .updateOne(
+        { _id: new ObjectId(betId) },
+        { $set: { status: 'SETTLEMENT_PENDING' } },
+      );
+  }
+
   private toBet(doc: Record<string, unknown>): Bet {
     return {
       id: (doc._id as ObjectId).toHexString(),
-      userId: (doc.userId as ObjectId).toHexString(),
+      userId: doc.userId as string,
+      currency: (doc.currency as string) ?? 'USD',
       roundId: (doc.roundId as ObjectId).toHexString(),
       slotId: doc.slotId as BetSlotId,
       amount: doc.amount as number,

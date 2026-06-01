@@ -1,46 +1,34 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { env } from '@/config/env';
-import { AppError } from '@/shared/errors/AppError';
-import { ErrorCode } from '@/shared/errors/error-codes';
 import {
-  WALLET_REPOSITORY,
+  CreditContext,
+  DebitContext,
   IWalletRepository,
+  RollbackContext,
+  WALLET_REPOSITORY,
+  WalletResult,
 } from './wallet.repository.interface';
-import { Wallet } from './wallet.types';
 
+// Thin facade over the white-label seamless wallet. The platform owns no money
+// state of its own; every call delegates to the operator over HTTP/HMAC.
 @Injectable()
 export class WalletService {
   constructor(
     @Inject(WALLET_REPOSITORY) private readonly walletRepo: IWalletRepository,
   ) {}
 
-  async getBalance(userId: string): Promise<number> {
-    const wallet = await this.walletRepo.findByUserId(userId);
-    if (!wallet)
-      throw new AppError(404, ErrorCode.NOT_FOUND, 'Wallet not found');
-    return wallet.balance;
+  getBalance(playerId: string, currency: string): Promise<number> {
+    return this.walletRepo.getBalance(playerId, currency);
   }
 
-  async createWallet(userId: string): Promise<Wallet> {
-    return this.walletRepo.create(userId, env.INITIAL_DEMO_BALANCE);
+  debit(ctx: DebitContext): Promise<WalletResult> {
+    return this.walletRepo.debit(ctx);
   }
 
-  async deductBalance(userId: string, amount: number): Promise<Wallet> {
-    const wallet = await this.walletRepo.deductBalance(userId, amount);
-    if (!wallet)
-      throw new AppError(
-        400,
-        ErrorCode.INSUFFICIENT_BALANCE,
-        'Insufficient balance',
-      );
-    return wallet;
+  credit(ctx: CreditContext): Promise<WalletResult> {
+    return this.walletRepo.credit(ctx);
   }
 
-  async addBalance(userId: string, amount: number): Promise<Wallet> {
-    return this.walletRepo.addBalance(userId, amount);
-  }
-
-  async reset(userId: string): Promise<Wallet> {
-    return this.walletRepo.setBalance(userId, env.INITIAL_DEMO_BALANCE);
+  rollback(ctx: RollbackContext): Promise<WalletResult> {
+    return this.walletRepo.rollback(ctx);
   }
 }

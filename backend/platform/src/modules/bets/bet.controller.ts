@@ -34,6 +34,7 @@ export class BetController {
   async placeBet(@Body() body: PlaceBetDto, @Req() req: AuthenticatedRequest) {
     const result = await this.betService.placeBet(
       req.userId,
+      req.currency,
       body.slotId,
       body.amount,
       body.autoCashOut ?? null,

@@ -7,6 +7,16 @@ import { ErrorCode } from '../errors/error-codes';
 
 export interface AuthenticatedRequest extends Request {
   userId: string;
+  currency: string;
+  sessionId: string;
+  displayName: string;
+}
+
+interface PlatformJwtPayload {
+  sub: string;
+  currency: string;
+  sessionId: string;
+  displayName: string;
 }
 
 @Injectable()
@@ -23,10 +33,14 @@ export class JwtAuthGuard implements CanActivate {
     }
     const token = authHeader.slice(7);
     try {
-      const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as {
-        sub: string;
-      };
+      const payload = jwt.verify(
+        token,
+        env.JWT_ACCESS_SECRET,
+      ) as PlatformJwtPayload;
       req.userId = payload.sub;
+      req.currency = payload.currency;
+      req.sessionId = payload.sessionId;
+      req.displayName = payload.displayName;
       return true;
     } catch {
       throw new AppError(

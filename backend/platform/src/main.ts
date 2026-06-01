@@ -20,19 +20,10 @@ async function bootstrap() {
   app.enableCors({ origin: env.CORS_ORIGIN });
 
   app.use(
-    '/api/auth/register',
+    '/api/auth/launch',
     rateLimit({
       windowMs: 15 * 60 * 1000,
-      max: 10,
-      standardHeaders: true,
-      legacyHeaders: false,
-    }),
-  );
-  app.use(
-    '/api/auth/login',
-    rateLimit({
-      windowMs: 15 * 60 * 1000,
-      max: 10,
+      max: 30,
       standardHeaders: true,
       legacyHeaders: false,
     }),

@@ -24,4 +24,9 @@ export interface IBetRepository extends IBaseRepository<Bet> {
   ): Promise<Bet | null>;
   resolveLosses(roundId: string): Promise<Bet[]>;
   cancelByUser(userId: string, roundId: string): Promise<void>;
+  // Recovery: every still-PLACED bet across all rounds. On a clean boot this is
+  // empty; after an interrupted round these are debited-but-unresolved orphans.
+  findAllPlaced(): Promise<Bet[]>;
+  markCanceled(betId: string): Promise<void>;
+  markSettlementPending(betId: string): Promise<void>;
 }

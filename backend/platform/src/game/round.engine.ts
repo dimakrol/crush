@@ -6,6 +6,7 @@ import { logger } from '@/shared/utils/logger'
 import { ROUND_REPOSITORY, IRoundRepository } from '@/modules/rounds/round.repository.interface'
 import { Round } from '@/modules/rounds/round.types'
 import { BetService } from '@/modules/bets/bet.service'
+import { Bet } from '@/modules/bets/bet.types'
 import { GameGateway } from '@/socket/game.gateway'
 
 @Injectable()
@@ -18,7 +19,11 @@ export class RoundEngine implements OnModuleInit {
     private readonly gateway: GameGateway,
   ) {}
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
+    // Roll back any debits left open by an interrupted round before starting a
+    // fresh loop, so the operator ledger never carries orphaned stakes.
+    const recovered = await this.betService.recoverOpenBets()
+    if (recovered > 0) logger.warn('Rolled back open bets from a previous run', { count: recovered })
     this.startLoop()
   }
 
@@ -79,6 +84,12 @@ export class RoundEngine implements OnModuleInit {
     logger.info('Round RUNNING', { roundId: round.id, crashPoint: round.crashPoint })
     this.gateway.emitToAll('round:started', { roundId: round.id, phase: 'RUNNING', startedAt })
 
+    // Auto-cashouts are detected and marked inside the tick (fast Mongo write),
+    // but their wallet credits are deferred: the 100ms tick must never block on
+    // a network call to the operator. Each marked cashout is collected here and
+    // credited after the interval is cleared (§2.12).
+    const pendingCredits: { bet: Bet; payout: number }[] = []
+
     await new Promise<void>((resolve) => {
       const start = Date.now()
       const tick = setInterval(async () => {
@@ -90,11 +101,11 @@ export class RoundEngine implements OnModuleInit {
           multiplier: parseFloat(multiplier.toFixed(2)),
         })
 
-        const cashouts = await this.betService.processAutoCashouts(round.id, multiplier)
-        for (const { bet } of cashouts) {
-          const balance = await this.betService.getUserBalance(bet.userId)
-          this.gateway.emitToUser(bet.userId, 'bet:cashedOut', { bet })
-          this.gateway.emitToUser(bet.userId, 'wallet:updated', { balance })
+        const marked = await this.betService.markAutoCashouts(round.id, multiplier)
+        for (const entry of marked) {
+          pendingCredits.push(entry)
+          // Tell the player they cashed out now; the balance follows once credited.
+          this.gateway.emitToUser(entry.bet.userId, 'bet:cashedOut', { bet: entry.bet })
         }
 
         if (multiplier >= round.crashPoint) {
@@ -103,6 +114,16 @@ export class RoundEngine implements OnModuleInit {
         }
       }, 100)
     })
+
+    // Drain credits AFTER the tick loop has stopped — never inside the tick.
+    for (const { bet, payout } of pendingCredits) {
+      try {
+        const balance = await this.betService.creditWin(bet, payout)
+        this.gateway.emitToUser(bet.userId, 'wallet:updated', { balance })
+      } catch (err) {
+        logger.error('Auto-cashout credit failed', { betId: bet.id, error: (err as Error).message })
+      }
+    }
   }
 
   private async runCrashed(round: Round): Promise<void> {
