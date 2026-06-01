@@ -9,11 +9,11 @@ interface BettingPanelProps {
   currentMultiplier: number
   slot: SlotState
   authed: boolean
+  currency: string | null
   onPlaceBet: (slotId: BetSlotId, amount: number, autoCashOut: number | null) => void
   onCashOut: (slotId: BetSlotId) => void
   onQueueNext: (slotId: BetSlotId, amount: number, autoCashOut: number | null) => void
   onCancelNext: (slotId: BetSlotId) => void
-  onRequireLogin: () => void
 }
 
 const QUICK_AMOUNTS = [10, 25, 50, 100]
@@ -25,11 +25,11 @@ export function BettingPanel({
   currentMultiplier,
   slot,
   authed,
+  currency,
   onPlaceBet,
   onCashOut,
   onQueueNext,
   onCancelNext,
-  onRequireLogin,
 }: BettingPanelProps) {
   const [betInput, setBetInput] = useState('')
   const [autoCashOutInput, setAutoCashOutInput] = useState('')
@@ -53,19 +53,11 @@ export function BettingPanel({
   const inputsDisabled = !authed || !!bet || !!queued || pending !== null
 
   function handlePlace() {
-    if (!authed) {
-      onRequireLogin()
-      return
-    }
     if (!canPlace) return
     onPlaceBet(slotId, parsedAmount, autoCashOut)
   }
 
   function handleQueue() {
-    if (!authed) {
-      onRequireLogin()
-      return
-    }
     if (!canQueue) return
     onQueueNext(slotId, parsedAmount, autoCashOut)
   }
@@ -79,9 +71,9 @@ export function BettingPanel({
 
       {/* Resolved/active bet summary, queued next-round summary, or inputs */}
       {bet ? (
-        <BetSummary slot={slot} phase={phase} currentMultiplier={currentMultiplier} />
+        <BetSummary slot={slot} phase={phase} currentMultiplier={currentMultiplier} currency={currency} />
       ) : queued ? (
-        <QueuedSummary queued={queued} />
+        <QueuedSummary queued={queued} currency={currency} />
       ) : (
         <>
           <input
@@ -133,7 +125,7 @@ export function BettingPanel({
         >
           {pending === 'cashing'
             ? 'Cashing…'
-            : `Cash Out ${formatCredits(Math.floor((bet?.amount ?? 0) * currentMultiplier * 100) / 100)}`}
+            : `Cash Out ${formatCredits(Math.floor((bet?.amount ?? 0) * currentMultiplier * 100) / 100, currency)}`}
         </button>
       ) : bet ? null : queued ? (
         <button
@@ -143,31 +135,44 @@ export function BettingPanel({
         >
           {pending === 'canceling' ? 'Canceling…' : 'Cancel next-round bet'}
         </button>
+      ) : !authed ? (
+        <button
+          disabled
+          className="w-full py-3 text-sm font-semibold rounded-xl bg-gray-700 text-gray-400 cursor-not-allowed"
+        >
+          Launch from the casino lobby to play
+        </button>
       ) : isWaiting ? (
         <button
           onClick={handlePlace}
-          disabled={authed ? !canPlace : false}
+          disabled={!canPlace}
           className="w-full py-3 font-bold rounded-xl bg-yellow-500 text-gray-900 hover:bg-yellow-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          {!authed ? 'Log in to bet' : pending === 'placing' ? 'Placing…' : 'Place Bet'}
+          {pending === 'placing' ? 'Placing…' : 'Place Bet'}
         </button>
       ) : (
         <button
           onClick={handleQueue}
-          disabled={authed ? !canQueue : false}
+          disabled={!canQueue}
           className="w-full py-3 font-bold rounded-xl bg-blue-500 text-white hover:bg-blue-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          {!authed ? 'Log in to bet' : pending === 'queuing' ? 'Queuing…' : 'Bet (next round)'}
+          {pending === 'queuing' ? 'Queuing…' : 'Bet (next round)'}
         </button>
       )}
     </div>
   )
 }
 
-function QueuedSummary({ queued }: { queued: NonNullable<SlotState['queued']> }) {
+function QueuedSummary({
+  queued,
+  currency,
+}: {
+  queued: NonNullable<SlotState['queued']>
+  currency: string | null
+}) {
   return (
     <div className="text-sm text-gray-300">
-      Queued for next round: <span className="font-semibold text-white">{formatCredits(queued.amount)}</span>
+      Queued for next round: <span className="font-semibold text-white">{formatCredits(queued.amount, currency)}</span>
       {queued.autoCashOut && <span className="text-gray-400"> · auto @ {formatMultiplier(queued.autoCashOut)}</span>}
     </div>
   )
@@ -186,35 +191,37 @@ function BetSummary({
   slot,
   phase,
   currentMultiplier,
+  currency,
 }: {
   slot: SlotState
   phase: GamePhase
   currentMultiplier: number
+  currency: string | null
 }) {
   const bet = slot.bet!
   if (bet.status === 'CASHED_OUT' && bet.cashOutMultiplier !== null) {
     return (
       <div className="text-sm">
         <p className="text-green-400 font-semibold">✓ {formatMultiplier(bet.cashOutMultiplier)}</p>
-        <p className="text-green-300 text-xs">Won {formatCredits(bet.payout)}</p>
+        <p className="text-green-300 text-xs">Won {formatCredits(bet.payout, currency)}</p>
       </div>
     )
   }
   if (bet.status === 'LOST' || (bet.status === 'PLACED' && phase === 'CRASHED')) {
     return (
       <div className="text-sm">
-        <p className="text-red-400 font-semibold">✗ Lost {formatCredits(bet.amount)}</p>
+        <p className="text-red-400 font-semibold">✗ Lost {formatCredits(bet.amount, currency)}</p>
       </div>
     )
   }
   // PLACED, waiting or running
   return (
     <div className="text-sm text-gray-300">
-      Bet: <span className="font-semibold text-white">{formatCredits(bet.amount)}</span>
+      Bet: <span className="font-semibold text-white">{formatCredits(bet.amount, currency)}</span>
       {bet.autoCashOut && <span className="text-gray-400"> · auto @ {formatMultiplier(bet.autoCashOut)}</span>}
       {phase === 'RUNNING' && (
         <span className="block text-xs text-gray-400 tabular-nums">
-          Now worth {formatCredits(Math.floor(bet.amount * currentMultiplier * 100) / 100)}
+          Now worth {formatCredits(Math.floor(bet.amount * currentMultiplier * 100) / 100, currency)}
         </span>
       )}
     </div>

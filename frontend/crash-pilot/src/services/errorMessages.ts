@@ -2,8 +2,11 @@ import { ApiError } from './api'
 
 // Maps backend error codes to friendly, user-facing copy.
 const MESSAGES: Record<string, string> = {
-  EMAIL_ALREADY_EXISTS: 'That email is already registered. Try logging in.',
-  INVALID_CREDENTIALS: 'Incorrect email or password.',
+  INVALID_LAUNCH_TOKEN: 'This game session is invalid. Relaunch from the casino lobby.',
+  LAUNCH_TOKEN_EXPIRED: 'This game session has expired. Relaunch from the casino lobby.',
+  LAUNCH_TOKEN_ALREADY_USED: 'This game session was already opened. Relaunch from the casino lobby.',
+  WALLET_UNAVAILABLE: 'The casino wallet is temporarily unavailable. Please try again.',
+  SETTLEMENT_PENDING: 'Your win is being settled by the casino — your balance will update shortly.',
   ROUND_NOT_WAITING: 'Betting is closed — wait for the next round.',
   ROUND_NOT_RUNNING: 'You can only cash out while the round is running.',
   INSUFFICIENT_BALANCE: 'Not enough balance for that bet.',

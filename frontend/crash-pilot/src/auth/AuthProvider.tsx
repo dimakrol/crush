@@ -1,28 +1,31 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { AuthContext, type AuthStatus } from './authContext'
-import type { AuthUser } from '../services/types'
-import * as authApi from '../services/authApi'
-import { getToken, setToken, clearToken, onTokenChange } from '../services/token'
+import type { Player } from '../services/types'
+import { launchParams, launchOnce } from '../services/launch'
+import { setToken, clearToken } from '../services/token'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null)
-  const [status, setStatus] = useState<AuthStatus>(getToken() ? 'loading' : 'guest')
+  const [player, setPlayer] = useState<Player | null>(null)
+  // A launch token in the URL means we're embedded by the lobby and authenticating;
+  // without one we stay a guest spectator.
+  const [status, setStatus] = useState<AuthStatus>(launchParams.token ? 'loading' : 'guest')
 
-  // Hydrate the session from a persisted token on first load.
+  // Exchange the single-use launch token for a platform session on first load.
   useEffect(() => {
+    const token = launchParams.token
+    if (!token) return // tokenless → guest spectator (status already 'guest')
     let cancelled = false
-    if (!getToken()) return // initial status is already 'guest' when no token
-    authApi
-      .me()
+    launchOnce(token)
       .then((res) => {
         if (cancelled) return
-        setUser(res.user)
+        setToken(res.accessToken) // in-memory; notifies the socket to authenticate
+        setPlayer(res.player)
         setStatus('authenticated')
       })
       .catch(() => {
         if (cancelled) return
-        clearToken() // expired/invalid → drop to guest
-        setUser(null)
+        clearToken() // expired / already-used / invalid → spectate
+        setPlayer(null)
         setStatus('guest')
       })
     return () => {
@@ -30,38 +33,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // If the token is cleared elsewhere (e.g. a 401 in the api layer), reflect it.
-  useEffect(() => {
-    return onTokenChange((token) => {
-      if (!token) {
-        setUser(null)
-        setStatus('guest')
-      }
-    })
-  }, [])
-
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await authApi.login(email, password)
-    setToken(res.accessToken)
-    setUser(res.user)
-    setStatus('authenticated')
-  }, [])
-
-  const register = useCallback(async (email: string, password: string) => {
-    const res = await authApi.register(email, password)
-    setToken(res.accessToken)
-    setUser(res.user)
-    setStatus('authenticated')
-  }, [])
-
-  const logout = useCallback(() => {
-    clearToken()
-    setUser(null)
-    setStatus('guest')
-  }, [])
-
   return (
-    <AuthContext.Provider value={{ user, status, login, register, logout }}>
+    <AuthContext.Provider
+      value={{ player, status, currency: player?.currency ?? launchParams.currency }}
+    >
       {children}
     </AuthContext.Provider>
   )

@@ -6,19 +6,20 @@ export type GamePhase = 'WAITING' | 'RUNNING' | 'CRASHED'
 export type BetSlotId = 1 | 2
 export type BetStatus = 'PLACED' | 'CASHED_OUT' | 'LOST' | 'CANCELED'
 
-export interface AuthUser {
+// The player identity minted by the white-label and returned by the platform's
+// /api/auth/launch. `balance` is decimal currency (the platform converts from the
+// operator's minor units at its wallet seam).
+export interface Player {
   id: string
-  email: string
-}
-
-export interface AuthResult {
-  user: AuthUser
-  accessToken: string
-}
-
-export interface MeResult {
-  user: AuthUser
+  displayName: string
+  currency: string
   balance: number
+}
+
+// POST /api/auth/launch — exchanges a single-use launch token for a platform session.
+export interface LaunchResult {
+  player: Player
+  accessToken: string
 }
 
 export interface Bet {

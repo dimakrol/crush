@@ -1,14 +1,14 @@
 import { createContext } from 'react'
-import type { AuthUser } from '../services/types'
+import type { Player } from '../services/types'
 
 export type AuthStatus = 'loading' | 'authenticated' | 'guest'
 
 export interface AuthContextValue {
-  user: AuthUser | null
+  player: Player | null
   status: AuthStatus
-  login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string) => Promise<void>
-  logout: () => void
+  // The session currency, known as soon as the launch URL is parsed (even while
+  // the token is still being exchanged) so labels can render it immediately.
+  currency: string | null
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)

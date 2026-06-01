@@ -2,26 +2,22 @@ import { formatCredits } from '../utils/format'
 
 interface HeaderProps {
   authed: boolean
-  email: string | null
+  displayName: string | null
+  currency: string | null
   balance: number | null
   connected: boolean
   muted: boolean
-  onLogin: () => void
-  onLogout: () => void
-  onResetBalance: () => void
   onShowHistory: () => void
   onToggleMute: () => void
 }
 
 export function Header({
   authed,
-  email,
+  displayName,
+  currency,
   balance,
   connected,
   muted,
-  onLogin,
-  onLogout,
-  onResetBalance,
   onShowHistory,
   onToggleMute,
 }: HeaderProps) {
@@ -46,9 +42,11 @@ export function Header({
         {authed ? (
           <>
             <div className="text-right">
-              <p className="text-xs text-gray-400 uppercase tracking-wider">Balance</p>
+              <p className="text-xs text-gray-400 uppercase tracking-wider">
+                {displayName ?? 'Balance'}
+              </p>
               <p className="text-lg font-semibold text-white">
-                {balance === null ? '—' : formatCredits(balance)}
+                {balance === null ? '—' : formatCredits(balance, currency)}
               </p>
             </div>
             <button
@@ -57,27 +55,9 @@ export function Header({
             >
               My Bets
             </button>
-            <button
-              onClick={onResetBalance}
-              className="px-3 py-1.5 text-xs text-gray-400 border border-gray-600 rounded-lg hover:border-gray-400 hover:text-white transition-colors"
-            >
-              Reset
-            </button>
-            <button
-              onClick={onLogout}
-              className="px-3 py-1.5 text-xs text-gray-400 border border-gray-600 rounded-lg hover:border-gray-400 hover:text-white transition-colors"
-              title={email ?? undefined}
-            >
-              Log out
-            </button>
           </>
         ) : (
-          <button
-            onClick={onLogin}
-            className="px-4 py-2 text-sm font-semibold bg-yellow-400 text-gray-900 rounded-lg hover:bg-yellow-300 transition-colors"
-          >
-            Log In / Sign Up
-          </button>
+          <span className="text-sm text-gray-400">Spectating</span>
         )}
       </div>
     </header>

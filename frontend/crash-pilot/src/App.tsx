@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useCrashGame, SLOT_IDS } from './hooks/useCrashGame'
 import { useThrottledValue } from './hooks/useThrottledValue'
 import { useAuth } from './auth/useAuth'
@@ -8,11 +8,11 @@ import { Header } from './components/Header'
 import { GameCanvas } from './components/GameCanvas'
 import { BettingPanel } from './components/BettingPanel'
 import { RoundHistory } from './components/RoundHistory'
-import { AuthModal } from './components/AuthModal'
 import { MyBetsModal } from './components/MyBetsModal'
+import { notifyReady, notifyBalanceChanged, notifySessionEnded } from './services/lobbyBridge'
 
 export default function App() {
-  const { user, status, logout } = useAuth()
+  const { player, status, currency } = useAuth()
   const authed = status === 'authenticated'
   const {
     connected,
@@ -28,11 +28,9 @@ export default function App() {
     cashOut,
     queueNext,
     cancelNext,
-    resetBalance,
     clearError,
   } = useCrashGame()
 
-  const [showAuth, setShowAuth] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
 
   // The canvas's centerpiece needs 60 Hz to feel smooth; the betting panels
@@ -46,17 +44,39 @@ export default function App() {
   useGameSounds(phase, () => currentMultiplier)
   const { muted, toggle: toggleMute } = useMuteToggle()
 
+  // ── Lobby postMessage bridge (game → parent casino lobby) ─────────────────
+  // Announce we're embedded and ready once on mount.
+  useEffect(() => {
+    notifyReady()
+  }, [])
+
+  // Mirror every confirmed balance change up to the lobby header.
+  useEffect(() => {
+    if (authed && balance !== null && currency) {
+      notifyBalanceChanged(balance, currency)
+    }
+  }, [authed, balance, currency])
+
+  // Tell the lobby when the session ends (token expired / superseded → guest).
+  const wasAuthed = useRef(false)
+  useEffect(() => {
+    if (status === 'authenticated') {
+      wasAuthed.current = true
+    } else if (status === 'guest' && wasAuthed.current) {
+      wasAuthed.current = false
+      notifySessionEnded()
+    }
+  }, [status])
+
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
       <Header
         authed={authed}
-        email={user?.email ?? null}
+        displayName={player?.displayName ?? null}
+        currency={currency}
         balance={balance}
         connected={connected}
         muted={muted}
-        onLogin={() => setShowAuth(true)}
-        onLogout={logout}
-        onResetBalance={resetBalance}
         onShowHistory={() => setShowHistory(true)}
         onToggleMute={toggleMute}
       />
@@ -92,17 +112,16 @@ export default function App() {
               currentMultiplier={panelMultiplier}
               slot={slots[slotId]}
               authed={authed}
+              currency={currency}
               onPlaceBet={placeBet}
               onCashOut={cashOut}
               onQueueNext={queueNext}
               onCancelNext={cancelNext}
-              onRequireLogin={() => setShowAuth(true)}
             />
           ))}
         </div>
       </main>
 
-      {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
       {showHistory && <MyBetsModal onClose={() => setShowHistory(false)} />}
     </div>
   )

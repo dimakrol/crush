@@ -32,7 +32,6 @@ vi.mock('../../services/betApi', () => ({
 }))
 vi.mock('../../services/walletApi', () => ({
   getBalance: vi.fn().mockResolvedValue(0),
-  resetBalance: vi.fn(),
 }))
 
 // Import after mocks are registered.
@@ -45,11 +44,9 @@ function emit(event: string, payload: unknown) {
 }
 
 const guest: AuthContextValue = {
-  user: null,
+  player: null,
   status: 'guest',
-  login: vi.fn(),
-  register: vi.fn(),
-  logout: vi.fn(),
+  currency: null,
 }
 
 function wrapper({ children }: { children: ReactNode }) {

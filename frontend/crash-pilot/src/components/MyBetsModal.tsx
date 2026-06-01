@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import * as betApi from '../services/betApi'
+import { useAuth } from '../auth/useAuth'
 import { friendlyError } from '../services/errorMessages'
 import { formatCredits, formatMultiplier } from '../utils/format'
 import type { Bet } from '../services/types'
@@ -7,6 +8,7 @@ import type { Bet } from '../services/types'
 const PAGE_SIZE = 20
 
 export function MyBetsModal({ onClose }: { onClose: () => void }) {
+  const { currency } = useAuth()
   const [bets, setBets] = useState<Bet[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(true)
@@ -70,12 +72,12 @@ export function MyBetsModal({ onClose }: { onClose: () => void }) {
               >
                 <div className="text-gray-300">
                   <span className="text-gray-500">Slot {bet.slotId} · </span>
-                  {formatCredits(bet.amount)}
+                  {formatCredits(bet.amount, currency)}
                   <span className="block text-xs text-gray-500">
                     {new Date(bet.placedAt).toLocaleString()}
                   </span>
                 </div>
-                <BetOutcome bet={bet} />
+                <BetOutcome bet={bet} currency={currency} />
               </li>
             ))}
           </ul>
@@ -97,17 +99,17 @@ export function MyBetsModal({ onClose }: { onClose: () => void }) {
   )
 }
 
-function BetOutcome({ bet }: { bet: Bet }) {
+function BetOutcome({ bet, currency }: { bet: Bet; currency: string | null }) {
   if (bet.status === 'CASHED_OUT' && bet.cashOutMultiplier !== null) {
     return (
       <div className="text-right">
-        <p className="font-semibold text-green-400">+{formatCredits(bet.payout)}</p>
+        <p className="font-semibold text-green-400">+{formatCredits(bet.payout, currency)}</p>
         <p className="text-xs text-green-300">@ {formatMultiplier(bet.cashOutMultiplier)}</p>
       </div>
     )
   }
   if (bet.status === 'LOST') {
-    return <p className="font-semibold text-red-400">−{formatCredits(bet.amount)}</p>
+    return <p className="font-semibold text-red-400">−{formatCredits(bet.amount, currency)}</p>
   }
   return <p className="text-xs text-gray-500">{bet.status}</p>
 }

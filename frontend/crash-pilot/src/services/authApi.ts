@@ -1,25 +1,13 @@
 import { apiRequest } from './api'
-import type { AuthResult, MeResult } from './types'
+import type { LaunchResult } from './types'
 
-export async function register(email: string, password: string): Promise<AuthResult> {
-  const res = await apiRequest<AuthResult>('/api/auth/register', {
+// Exchange a single-use launch token (minted by the white-label lobby) for a
+// platform session: a JWT + the player's identity and starting balance.
+export async function launch(token: string): Promise<LaunchResult> {
+  const res = await apiRequest<LaunchResult>('/api/auth/launch', {
     method: 'POST',
-    body: { email, password },
+    body: { token },
     auth: false,
   })
-  return res.data
-}
-
-export async function login(email: string, password: string): Promise<AuthResult> {
-  const res = await apiRequest<AuthResult>('/api/auth/login', {
-    method: 'POST',
-    body: { email, password },
-    auth: false,
-  })
-  return res.data
-}
-
-export async function me(): Promise<MeResult> {
-  const res = await apiRequest<MeResult>('/api/auth/me')
   return res.data
 }

@@ -49,7 +49,6 @@ export interface UseCrashGameReturn {
   cashOut: (slotId: BetSlotId) => void
   queueNext: (slotId: BetSlotId, amount: number, autoCashOut?: number | null) => void
   cancelNext: (slotId: BetSlotId) => void
-  resetBalance: () => Promise<void>
   clearError: () => void
 }
 
@@ -299,16 +298,6 @@ export function useCrashGame(): UseCrashGameReturn {
     emitCancelNext(slotId)
   }, [])
 
-  const resetBalance = useCallback(async () => {
-    setActionError(null)
-    try {
-      const newBalance = await walletApi.resetBalance()
-      setBalance(newBalance)
-    } catch (err) {
-      setActionError(friendlyError(err))
-    }
-  }, [])
-
   const clearError = useCallback(() => setActionError(null), [])
 
   useEffect(() => stopRaf, [stopRaf])
@@ -321,7 +310,7 @@ export function useCrashGame(): UseCrashGameReturn {
     currentRoundId,
     crashPoint,
     roundHistory,
-    // Guest sees no private state even if stale values linger in state after logout.
+    // Guest sees no private state even if stale values linger after the session ends.
     balance: authed ? balance : null,
     slots: authed ? slots : EMPTY_SLOTS,
     actionError,
@@ -329,7 +318,6 @@ export function useCrashGame(): UseCrashGameReturn {
     cashOut,
     queueNext,
     cancelNext,
-    resetBalance,
     clearError,
   }
 }

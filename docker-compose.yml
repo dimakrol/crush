@@ -108,6 +108,8 @@ services:
     environment:
       VITE_API_URL: http://localhost:${BACKEND_PORT:-4100}
       VITE_SOCKET_URL: http://localhost:${BACKEND_PORT:-4100}
+      # Lobby origin authorized to frame the game (CSP frame-ancestors + postMessage target).
+      VITE_LOBBY_ORIGIN: http://localhost:${WHITELABEL_PORT:-4200}
     ports:
       - "${FRONTEND_PORT:-5274}:5174"
     volumes:
