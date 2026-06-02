@@ -14,41 +14,80 @@ npm run typecheck    # tsc --noEmit
 npm run lint         # eslint with --fix
 ```
 
+> Committed source is written **without semicolons** even though `.prettierrc` requires them.
+> Do **not** run `npm run lint --fix` on existing files — it rewrites the whole tree. Match the
+> no-semicolon style and rely on `npm run typecheck`.
+
 Start infrastructure before running the app:
 ```bash
-docker compose up -d   # mongo:7 + redis:7
+docker compose up -d   # mongo + redis + postgres + white-label
 ```
+
+## Role
+
+This is the **game backend** — round engine, bets, history, real-time socket. It is **no longer
+the money or identity authority**. Balance, transactions, and player identity live in
+`backend/white-label/`; this service is a **thin client** of the white-label's seamless-wallet
+and launch-token APIs. Mongo still backs bets/rounds/history; the wallet collection is retired.
+See `docs/white-label-integration-plan.md` (repo root) for the full design.
 
 ## Architecture
 
 **Stack:** NestJS 11 on Express, native MongoDB driver (no Mongoose), ioredis, Zod validation, Socket.IO via `@WebSocketGateway`, JWT auth.
 
 **Module layout** (`src/modules/`):
-- `auth/` — register/login/me, bcrypt + jwt, no refresh tokens
-- `users/` — user persistence only, no business logic
-- `wallet/` — balance deduct/add with atomic `$gte` condition to prevent overdraft
-- `bets/` — place/cashout/history, reads game state from Redis
+- `auth/` — **launch-token exchange**, not register/login. `POST /api/auth/launch { token }`
+  calls the white-label `authenticate` (over HMAC) and issues this platform's own JWT
+  `{ sub: playerId, currency, sessionId, displayName }`. `GET /api/auth/me` returns identity +
+  live balance. No register/login, no `users` collection (identity is the white-label's UUID).
+- `wallet/` — **thin client.** `HttpWalletRepository` calls the white-label over HMAC and
+  converts minor↔decimal at the seam. `GET /api/wallet` returns the live balance for the
+  session's currency. No reset (dropped).
+- `bets/` — place/cashout/history, reads game state from Redis; drives debit/credit (below).
 - `rounds/` — round persistence + phase transitions
 - `history/` — public read-only round history endpoint
+
+**Seamless-wallet client** (`src/shared/whitelabel/operator.client.ts`): signs every
+server-to-server call `X-Signature = HMAC-SHA256(OPERATOR_SECRET, `${timestamp}${rawBody}`)`,
+serializing the body once so the signed bytes equal the sent bytes. `HttpWalletRepository`
+(behind the `WALLET_REPOSITORY` token) exposes context-carrying
+`debit/credit/rollback/getBalance` and converts dollars→`Math.round(x*100)` out, minor→`x/100`
+back. `OPERATOR_API_KEY`/`OPERATOR_SECRET` **must match the white-label's**.
 
 **Cross-cutting:**
 - `src/game/` — `RoundEngine` (`OnModuleInit`) drives the WAITING → RUNNING → CRASHED loop using a `while(true)` async cycle; crash point = `Math.max(1.01, 0.99/Math.random())`; multiplier = `e^(0.06*t)` ticked every 100 ms via `setInterval`
 - `src/socket/` — `GameGateway` allows **guest connections** (no token) so spectators receive `round:*` broadcasts; a valid handshake token, or a mid-session `authenticate` message, joins the `userId` room for private events. `bet:place`/`bet:cashout` reject when `socket.userId` is absent. Uses `forwardRef` to break the circular dependency with `BetsModule`
 - `src/shared/errors/` — `AppError(statusCode, errorCode, message)` + `GlobalExceptionFilter`
 - `src/shared/pipes/` — `ZodValidationPipe` wraps Zod schemas for NestJS `@UsePipes`
-- `src/shared/guards/` — `JwtAuthGuard` extends request with `req.userId`
+- `src/shared/guards/` — `JwtAuthGuard` extends request with `req.userId`, `req.currency`, `req.sessionId`, `req.displayName`
+- `src/shared/whitelabel/` — `operator.client.ts`, the HMAC server-to-server caller for the white-label wallet/auth API
 
 ## Key patterns
 
-**Repository injection tokens** — every module exposes a `FOO_REPOSITORY` string token and an `IFooRepository` interface. The concrete Mongo implementation is swapped in via `{ provide: FOO_REPOSITORY, useClass: MongoFooRepository }` in each module's `providers`. Tests inject `jest.Mocked<IFooRepository>` directly.
+**Repository injection tokens** — every module exposes a `FOO_REPOSITORY` string token and an `IFooRepository` interface, swapped in via `{ provide: FOO_REPOSITORY, useClass: ... }`. Tests inject `jest.Mocked<IFooRepository>` directly. The wallet's implementation is now `HttpWalletRepository` (calls the white-label), not a Mongo one.
 
 **Redis game state** — `game:phase` (`WAITING|RUNNING|CRASHED`), `game:currentRound`, `game:currentMultiplier` are the only Redis keys. `BetService` reads these directly; no event bus.
 
-**Atomic wallet deduct** — `findOneAndUpdate` with `$gte` filter prevents balance going negative without transactions. Throws `INSUFFICIENT_BALANCE` if the filter doesn't match.
+**Money moves are delegated, with idempotent `txRef`** — `BetService` builds a deterministic
+`txRef` at each call site: `{roundId}:{playerId}:{slot}:bet` for the stake debit,
+`{roundId}:{playerId}:{slot}:win` for the cashout credit. The white-label dedupes on `txRef`,
+so a retry never double-spends or double-pays. `playerId` is a white-label **UUID**;
+`MongoBetRepository` stores `userId` as a **plain string** (only `roundId` stays an ObjectId).
 
-**Idempotent cashout** — `betRepo.cashOut` uses `findOneAndUpdate` with `{ status: 'PLACED' }` condition so concurrent cashout requests don't double-pay.
+**Money ordering & failure handling** (`docs/...-plan.md` §2.12):
+- **Bet:** white-label `debit` **first**, then persist the bet. Debit fails → reject. Bet-create
+  fails after debit → `rollback` (skipped on a dup-key `11000` — a concurrent winner already owns
+  the shared idempotent debit).
+- **Credit:** mark the bet resolved (idempotent `{ status: 'PLACED' }` guard) before crediting.
+- **Tick decoupling:** the 100ms tick only *detects and marks* auto-cashouts (fast Mongo write at
+  the crossing multiplier) + broadcasts; **`credit` network calls drain after `clearInterval`,
+  never inside the tick.** `creditWin` retries 3× bounded → `SETTLEMENT_PENDING` (no auto-sweep;
+  idempotency makes a later manual replay safe).
+- **Recovery:** on engine init, `recoverOpenBets` rolls back `PLACED` debits for an open round.
 
-**No MongoDB transactions** — the replica set requirement is explicitly avoided. Deduct-then-create and cashout-then-credit are two-step operations; the comment `// LIMITATION:` marks these seams.
+**Idempotent cashout** — `betRepo.cashOut` uses `findOneAndUpdate` with `{ status: 'PLACED' }` condition so concurrent cashout requests don't double-credit.
+
+**No cross-service transaction** — there is no transactional guarantee across the platform↔white-label boundary by design; safety rests entirely on **idempotent `txRef`** + the fail-safe ordering above. Treat `txRef` determinism as load-bearing.
 
 ## Testing
 

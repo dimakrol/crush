@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev          # start dev server (pinned to port 5174 to match backend CORS_ORIGIN)
+npm run dev          # start dev server (pinned to container port 5174 / host 5274)
 npm run typecheck    # TypeScript check (tsc -b --noEmit)
 npm test             # run Vitest unit tests
 npm run build        # production build
@@ -18,15 +18,36 @@ npx vitest run src/services/__tests__/api.test.ts
 
 ## Architecture
 
-Aviator-style crash game **client for the `backend/platform` NestJS service**. The backend is
-fully server-authoritative — it generates crash points, drives the WAITING→RUNNING→CRASHED loop,
-ticks the multiplier every 100ms, and runs auto-cashout — and pushes everything over Socket.IO.
-**This frontend is a passive renderer of that server state.** (It was originally a standalone
-browser-only simulation; that loop has been replaced. See `prd-backend-integration.md` at the repo root.)
+Aviator-style crash game **embedded as an iframe player inside the `backend/white-label` casino
+lobby**. The game backend (`backend/platform`) is fully server-authoritative — it generates crash
+points, drives the WAITING→RUNNING→CRASHED loop, ticks the multiplier every 100ms, and runs
+auto-cashout — and pushes everything over Socket.IO. **This frontend is a passive renderer of that
+server state.** The white-label (not this app) owns money and identity; see
+`docs/white-label-integration-plan.md` at the repo root.
 
-Config: `.env` holds `VITE_API_URL` / `VITE_SOCKET_URL` (both `http://localhost:4000` in dev).
-Dev server is pinned to port **5174** (`vite.config.ts`, `strictPort`) because the backend's
-`CORS_ORIGIN` is `http://localhost:5174`.
+Config (`.env`): `VITE_API_URL` / `VITE_SOCKET_URL` point at the **platform** game backend
+(host `http://localhost:4100`); `VITE_LOBBY_ORIGIN` is the white-label lobby origin authorized to
+frame the game (`http://localhost:4200`). The dev server runs on container port **5174** (vite
+`strictPort`), published on host **5274**. The white-label's `CORS_ORIGIN` / CSP authorize that
+origin.
+
+### Launch & framing
+
+The game does **not** have its own login. The lobby opens it as
+`<iframe src="<game>/?token=<launchToken>&currency=USD&lang=en">`; the game exchanges that
+single-use token for a platform JWT.
+
+- `services/launch.ts` reads `?token=`/`?currency=` once at module load and **strips the token
+  from the URL** (`history.replaceState`) so it can't be replayed from history. `launchOnce()`
+  memoizes the exchange so React StrictMode's double-mount can't burn the single-use ticket.
+- `services/lobbyBridge.ts` posts game→lobby events, all pinned to `VITE_LOBBY_ORIGIN` (never
+  `*`): `crashpilot:ready` (on mount), `crashpilot:balanceChanged { balance, currency }` (on every
+  confirmed balance), `crashpilot:sessionEnded` (authenticated→guest). **Units gotcha:** the lobby
+  ledger is integer minor units and renders `balance/100`, so `notifyBalanceChanged` converts the
+  platform's *decimal* balance back to minor via `Math.round(balance * 100)`.
+- **CSP `frame-ancestors 'self' <VITE_LOBBY_ORIGIN>`** is set in `vite.config.ts` `server.headers`
+  (via `loadEnv`); no `X-Frame-Options` is emitted. Changing it needs a **dev-server restart**
+  (`docker restart crush-frontend-1`) — HMR won't re-emit `server.headers`.
 
 ### Networking layer (`src/services/`)
 
@@ -35,16 +56,19 @@ Dev server is pinned to port **5174** (`vite.config.ts`, `strictPort`) because t
   token on 401.
 - `socket.ts` — singleton `socket.io-client`. Connects once at app start. Guests (no token) receive
   `round:*` broadcasts only; a token joins the `userId` room for private `bet:*` / `wallet:*` events.
-  On login mid-session it emits `authenticate { token }` (no reconnect); on logout it reconnects fresh.
-- `token.ts` — the JWT, persisted to `localStorage`, with a change-subscription used by `socket.ts`.
-- `authApi` / `betApi` / `walletApi` / `historyApi` — thin per-domain callers.
-- `errorMessages.ts` — maps backend error codes to friendly copy.
+  On authenticate mid-session it emits `authenticate { token }` (no reconnect).
+- `token.ts` — the platform JWT, held **in memory only** (no `localStorage`); a refresh ends the
+  session and you re-launch from the lobby. Keeps the change-subscription used by `socket.ts`.
+- `launch.ts` — one-shot launch handshake (see "Launch & framing" above).
+- `lobbyBridge.ts` — game→lobby postMessage channel (see above).
+- `authApi` (`launch()` only) / `betApi` / `walletApi` (`getBalance()` only) / `historyApi` — thin per-domain callers.
+- `errorMessages.ts` — maps backend error codes (incl. launch codes like `LAUNCH_TOKEN_ALREADY_USED`, `WALLET_UNAVAILABLE`) to friendly copy.
 
 ### Data flow (`src/hooks/useCrashGame.ts`)
 
 All game state lives in the hook; components render only what they're given. The hook subscribes to
 socket events and drives `phase`, `countdown`, `currentMultiplier`, `crashPoint`, `roundHistory`,
-per-slot bet state, and `balance`. Actions: `placeBet`, `cashOut`, `resetBalance`, `clearError`.
+per-slot bet state, and `balance`. Actions: `placeBet`, `cashOut`, `clearError`.
 
 - **Multiplier** is interpolated locally for smoothness: each `round:multiplier` tick re-anchors
   `{ multiplier, at: performance.now() }` and a RAF loop grows it via `e^(0.06·Δt)` from that anchor.
@@ -60,9 +84,11 @@ per-slot bet state, and `balance`. Actions: `placeBet`, `cashOut`, `resetBalance
 
 ### Auth (`src/auth/`)
 
-`AuthProvider` hydrates the session from a persisted token via `GET /api/auth/me`, exposing
-`{ user, status, login, register, logout }` through `useAuth`. The game is visible to guests;
-betting controls prompt login (`AuthModal`). JWT lifetime is set server-side (7d).
+`AuthProvider` exchanges the launch token (`launchOnce`) for a platform JWT + `Player`, exposing
+`{ player, status, currency }` through `useAuth` (`status: 'loading' | 'authenticated' | 'guest'`).
+A tokenless load (opened directly, not from the lobby) stays a **guest spectator** — the game
+renders but betting panels read *"Launch from the casino lobby to play."* There is no login,
+register, or logout UI (all removed; `AuthModal` deleted). JWT lifetime is set server-side.
 
 ### Betting model
 
