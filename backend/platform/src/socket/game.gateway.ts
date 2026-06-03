@@ -143,6 +143,25 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @SubscribeMessage('bet:cancel')
+  async handleCancelBet(
+    @ConnectedSocket() socket: AuthSocket,
+    @MessageBody() data: { betId: string },
+  ): Promise<void> {
+    if (!socket.userId) {
+      socket.emit('error', { code: ErrorCode.UNAUTHORIZED, message: 'Log in to cancel a bet' })
+      return
+    }
+    try {
+      const { bet, balance } = await this.betService.cancelBet(socket.userId, data.betId)
+      this.emitToUser(socket.userId, 'bet:canceled', { bet })
+      this.emitToUser(socket.userId, 'wallet:updated', { balance })
+    } catch (err) {
+      const e = err as AppError
+      socket.emit('error', { code: e.code ?? ErrorCode.INTERNAL_SERVER_ERROR, message: e.message })
+    }
+  }
+
   // Queue a bet for the next round (placed by RoundEngine at the next WAITING).
   @SubscribeMessage('bet:queueNext')
   async handleQueueNext(

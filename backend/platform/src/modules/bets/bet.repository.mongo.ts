@@ -116,6 +116,18 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
     return doc ? this.toBet(doc) : null;
   }
 
+  async cancelPlaced(betId: string, userId: string): Promise<Bet | null> {
+    const now = new Date();
+    const doc = await getDb()
+      .collection('bets')
+      .findOneAndUpdate(
+        { _id: new ObjectId(betId), userId, status: 'PLACED' },
+        { $set: { status: 'CANCELED', resolvedAt: now } },
+        { returnDocument: 'after' },
+      );
+    return doc ? this.toBet(doc) : null;
+  }
+
   async resolveLosses(roundId: string): Promise<Bet[]> {
     const now = new Date();
     await getDb()

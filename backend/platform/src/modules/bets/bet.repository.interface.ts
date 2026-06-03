@@ -22,6 +22,7 @@ export interface IBetRepository extends IBaseRepository<Bet> {
     multiplier: number,
     payout: number,
   ): Promise<Bet | null>;
+  cancelPlaced(betId: string, userId: string): Promise<Bet | null>;
   resolveLosses(roundId: string): Promise<Bet[]>;
   cancelByUser(userId: string, roundId: string): Promise<void>;
   // Recovery: every still-PLACED bet across all rounds. On a clean boot this is

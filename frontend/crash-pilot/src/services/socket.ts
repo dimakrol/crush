@@ -16,6 +16,7 @@ import type {
   RoundMultiplierEvent,
   RoundCrashedEvent,
   BetCashedOutEvent,
+  BetCanceledEvent,
   BetLostEvent,
   BetQueuedEvent,
   BetQueueCanceledEvent,
@@ -37,6 +38,7 @@ export interface ServerEvents {
   'round:crashed': RoundCrashedEvent
   'bet:placed': BetCashedOutEvent // { result } shape from socket bet:place; bet field present
   'bet:cashedOut': BetCashedOutEvent
+  'bet:canceled': BetCanceledEvent
   'bet:lost': BetLostEvent
   'bet:queued': BetQueuedEvent
   'bet:queueCanceled': BetQueueCanceledEvent
@@ -85,6 +87,10 @@ export function on<E extends keyof ServerEvents>(
 
 export function emitCashout(betId: string): void {
   getSocket().emit('bet:cashout', { betId })
+}
+
+export function emitCancelBet(betId: string): void {
+  getSocket().emit('bet:cancel', { betId })
 }
 
 export function emitQueueNext(slotId: BetSlotId, amount: number, autoCashOut: number | null): void {

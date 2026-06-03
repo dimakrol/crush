@@ -78,6 +78,9 @@ export interface RoundCrashedEvent {
 export interface BetCashedOutEvent {
   bet: Bet
 }
+export interface BetCanceledEvent {
+  bet: Bet
+}
 // Next-round queue events.
 export interface BetQueuedEvent {
   slotId: BetSlotId

@@ -115,6 +115,35 @@ export class BetService {
     return { bet, balance }
   }
 
+  async cancelBet(userId: string, betId: string): Promise<{ bet: Bet; balance: number }> {
+    const phase = await getRedis().get('game:phase')
+    if (phase !== 'WAITING') throw new AppError(400, ErrorCode.ROUND_NOT_WAITING, 'Bets can only be canceled before the round starts')
+
+    const currentRoundId = await getRedis().get('game:currentRound')
+    if (!currentRoundId) throw new AppError(400, ErrorCode.ROUND_NOT_WAITING, 'No active round')
+
+    const existing = await this.betRepo.findById(betId)
+    if (!existing || existing.userId !== userId || existing.roundId !== currentRoundId) {
+      throw new AppError(404, ErrorCode.BET_NOT_FOUND, 'Bet not found')
+    }
+    if (existing.status !== 'PLACED') throw new AppError(409, ErrorCode.BET_ALREADY_RESOLVED, 'Bet already resolved')
+
+    const bet = await this.betRepo.cancelPlaced(betId, userId)
+    if (!bet) throw new AppError(409, ErrorCode.BET_ALREADY_RESOLVED, 'Bet already resolved')
+
+    const refTxRef = betTxRef(bet.roundId, bet.userId, bet.slotId)
+    try {
+      const { balance } = await this.withRetry(() =>
+        this.walletService.rollback({ playerId: bet.userId, currency: bet.currency, refTxRef }),
+      )
+      return { bet, balance }
+    } catch (err) {
+      logger.error('Bet cancellation rollback failed', { betId: bet.id, refTxRef, error: (err as Error).message })
+      const balance = await this.walletService.getBalance(bet.userId, bet.currency)
+      return { bet, balance }
+    }
+  }
+
   // Credit a cashed-out bet's winnings. The bet is already marked resolved; the
   // win txRef is idempotent so retries never double-pay. On unrecoverable
   // failure the bet is flagged SETTLEMENT_PENDING and the (still-uncredited)

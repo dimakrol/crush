@@ -51,6 +51,15 @@ export class BetController {
     return { data: result };
   }
 
+  @Post(':betId/cancel')
+  async cancelBet(
+    @Param('betId') betId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const result = await this.betService.cancelBet(req.userId, betId);
+    return { data: result };
+  }
+
   @Get('active')
   async getActive(@Req() req: AuthenticatedRequest) {
     const roundId = await getRedis().get('game:currentRound');

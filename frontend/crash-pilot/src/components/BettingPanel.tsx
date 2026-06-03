@@ -12,6 +12,7 @@ interface BettingPanelProps {
   currency: string | null
   onPlaceBet: (slotId: BetSlotId, amount: number, autoCashOut: number | null) => void
   onCashOut: (slotId: BetSlotId) => void
+  onCancelBet: (slotId: BetSlotId) => void
   onQueueNext: (slotId: BetSlotId, amount: number, autoCashOut: number | null) => void
   onCancelNext: (slotId: BetSlotId) => void
 }
@@ -28,6 +29,7 @@ export function BettingPanel({
   currency,
   onPlaceBet,
   onCashOut,
+  onCancelBet,
   onQueueNext,
   onCancelNext,
 }: BettingPanelProps) {
@@ -50,6 +52,7 @@ export function BettingPanel({
   const canQueue = authed && isMidRound && !bet && !queued && isValidAmount && !autoCashOutError && !pending
   const isPlaced = bet?.status === 'PLACED'
   const canCashOut = phase === 'RUNNING' && isPlaced
+  const canCancelBet = phase === 'WAITING' && isPlaced
   const inputsDisabled = !authed || !!bet || !!queued || pending !== null
 
   function handlePlace() {
@@ -126,6 +129,14 @@ export function BettingPanel({
           {pending === 'cashing'
             ? 'Cashing…'
             : `Cash Out ${formatCredits(Math.floor((bet?.amount ?? 0) * currentMultiplier * 100) / 100, currency)}`}
+        </button>
+      ) : canCancelBet ? (
+        <button
+          onClick={() => onCancelBet(slotId)}
+          disabled={pending === 'canceling'}
+          className="w-full py-3 font-bold rounded-xl bg-gray-700 text-gray-200 hover:bg-gray-600 disabled:opacity-50 transition-colors"
+        >
+          {pending === 'canceling' ? 'Canceling…' : 'Cancel bet'}
         </button>
       ) : bet ? null : queued ? (
         <button

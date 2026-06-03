@@ -26,6 +26,7 @@ export default function App() {
     actionError,
     placeBet,
     cashOut,
+    cancelBet,
     queueNext,
     cancelNext,
     clearError,
@@ -115,6 +116,7 @@ export default function App() {
               currency={currency}
               onPlaceBet={placeBet}
               onCashOut={cashOut}
+              onCancelBet={cancelBet}
               onQueueNext={queueNext}
               onCancelNext={cancelNext}
             />

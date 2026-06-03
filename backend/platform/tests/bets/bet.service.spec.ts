@@ -26,6 +26,7 @@ const mockBetRepo: jest.Mocked<IBetRepository> = {
   findActiveByUser: jest.fn(),
   findByUser: jest.fn(),
   cashOut: jest.fn(),
+  cancelPlaced: jest.fn(),
   resolveLosses: jest.fn(),
   cancelByUser: jest.fn(),
   findAllPlaced: jest.fn(),
@@ -185,6 +186,37 @@ describe('BetService.consumeNextRoundQueue', () => {
     expect(outcomes).toContainEqual(expect.objectContaining({ ok: true, userId: 'user1', slotId: 1 }))
     expect(outcomes).toContainEqual(
       expect.objectContaining({ ok: false, userId: 'user2', slotId: 2, code: ErrorCode.INSUFFICIENT_BALANCE }),
+    )
+  })
+})
+
+describe('BetService.cancelBet', () => {
+  it('rejects when phase is not WAITING', async () => {
+    redisMock.get.mockResolvedValueOnce('RUNNING')
+    await expect(service.cancelBet('user1', 'bet1')).rejects.toMatchObject({ code: ErrorCode.ROUND_NOT_WAITING })
+  })
+
+  it('rejects another user or stale round bet', async () => {
+    redisMock.get
+      .mockResolvedValueOnce('WAITING')
+      .mockResolvedValueOnce('round2')
+    mockBetRepo.findById.mockResolvedValueOnce(makeBet({ roundId: 'round1' }))
+    await expect(service.cancelBet('user1', 'bet1')).rejects.toMatchObject({ code: ErrorCode.BET_NOT_FOUND })
+    expect(mockBetRepo.cancelPlaced).not.toHaveBeenCalled()
+  })
+
+  it('marks the bet canceled then rolls back the debit txRef', async () => {
+    redisMock.get
+      .mockResolvedValueOnce('WAITING')
+      .mockResolvedValueOnce('round1')
+    mockBetRepo.findById.mockResolvedValueOnce(makeBet())
+    mockBetRepo.cancelPlaced.mockResolvedValueOnce(makeBet({ status: 'CANCELED' }))
+    ;(mockWalletService.rollback as jest.Mock).mockResolvedValueOnce({ balance: 1000 })
+    const result = await service.cancelBet('user1', 'bet1')
+    expect(result.balance).toBe(1000)
+    expect(mockBetRepo.cancelPlaced).toHaveBeenCalledWith('bet1', 'user1')
+    expect(mockWalletService.rollback).toHaveBeenCalledWith(
+      expect.objectContaining({ playerId: 'user1', currency: 'USD', refTxRef: 'round1:user1:1:bet' }),
     )
   })
 })

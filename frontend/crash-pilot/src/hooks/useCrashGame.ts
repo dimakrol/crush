@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/useAuth'
-import { on as onSocket, getSocket, emitCashout, emitQueueNext, emitCancelNext } from '../services/socket'
+import { on as onSocket, getSocket, emitCashout, emitCancelBet, emitQueueNext, emitCancelNext } from '../services/socket'
 import * as betApi from '../services/betApi'
 import * as walletApi from '../services/walletApi'
 import { getRecentRounds } from '../services/historyApi'
@@ -47,6 +47,7 @@ export interface UseCrashGameReturn {
   actionError: string | null
   placeBet: (slotId: BetSlotId, amount: number, autoCashOut?: number | null) => Promise<void>
   cashOut: (slotId: BetSlotId) => void
+  cancelBet: (slotId: BetSlotId) => void
   queueNext: (slotId: BetSlotId, amount: number, autoCashOut?: number | null) => void
   cancelNext: (slotId: BetSlotId) => void
   clearError: () => void
@@ -222,6 +223,9 @@ export function useCrashGame(): UseCrashGameReturn {
         const bet = e.bet
         setSlots((prev) => ({ ...prev, [bet.slotId]: { bet, pending: null } }))
       }),
+      onSocket('bet:canceled', (e) => {
+        setSlots((prev) => ({ ...prev, [e.bet.slotId]: { bet: null, queued: prev[e.bet.slotId].queued, pending: null } }))
+      }),
       onSocket('bet:lost', (e) => {
         const { slotId } = e.bet
         setSlots((prev) => ({
@@ -253,10 +257,13 @@ export function useCrashGame(): UseCrashGameReturn {
       onSocket('session:superseded', () => {
         setActionError('This session was opened in another tab.')
       }),
-      onSocket('error', (e) => setActionError(friendlyError(e))),
+      onSocket('error', (e) => {
+        setActionError(friendlyError(e))
+        void resync()
+      }),
     ]
     return () => offs.forEach((off) => off())
-  }, [])
+  }, [resync])
 
   // ── Actions ─────────────────────────────────────────────────────────────
   const placeBet = useCallback(
@@ -283,6 +290,17 @@ export function useCrashGame(): UseCrashGameReturn {
       const cur = prev[slotId]
       if (!cur.bet || cur.pending) return prev
       return { ...prev, [slotId]: { ...cur, pending: 'cashing' } }
+    })
+  }, [])
+
+  const cancelBet = useCallback((slotId: BetSlotId) => {
+    const slot = slotsRef.current[slotId]
+    if (!slot.bet || slot.bet.status !== 'PLACED' || phaseRef.current !== 'WAITING' || slot.pending) return
+    emitCancelBet(slot.bet.id)
+    setSlots((prev) => {
+      const cur = prev[slotId]
+      if (!cur.bet || cur.pending) return prev
+      return { ...prev, [slotId]: { ...cur, pending: 'canceling' } }
     })
   }, [])
 
@@ -316,6 +334,7 @@ export function useCrashGame(): UseCrashGameReturn {
     actionError,
     placeBet,
     cashOut,
+    cancelBet,
     queueNext,
     cancelNext,
     clearError,
