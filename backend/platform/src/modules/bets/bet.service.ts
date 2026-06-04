@@ -236,8 +236,8 @@ export class BetService {
   // ── Next-round queue (pure intent; no money moves until placement) ────────
 
   // Queue a bet for the next round. Allowed only mid-round (RUNNING/CRASHED) —
-  // during WAITING the user just bets normally. Per-slot: rejects if the slot
-  // already holds a bet this round, matching the unique (round,user,slot) index.
+  // during WAITING the user just bets normally. Per-slot: rejects only while
+  // the current-round bet is still active; resolved bets may queue the next round.
   async queueNextBet(userId: string, currency: string, slotId: BetSlotId, amount: number, autoCashOut: number | null): Promise<{ slotId: BetSlotId; amount: number; autoCashOut: number | null }> {
     const phase = await getRedis().get('game:phase')
     if (phase !== 'RUNNING' && phase !== 'CRASHED') {
@@ -249,7 +249,7 @@ export class BetService {
     const roundId = await getRedis().get('game:currentRound')
     if (roundId) {
       const existing = await this.betRepo.findBySlot(roundId, userId, slotId)
-      if (existing) throw new AppError(409, ErrorCode.BET_QUEUE_NOT_ALLOWED, `Slot ${slotId} already has a bet this round`)
+      if (existing?.status === 'PLACED') throw new AppError(409, ErrorCode.BET_QUEUE_NOT_ALLOWED, `Slot ${slotId} already has an active bet this round`)
     }
 
     await getRedis().hset(QUEUE_KEY, queueField(userId, slotId), JSON.stringify({ amount, autoCashOut, currency } satisfies QueuedIntent))

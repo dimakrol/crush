@@ -14,6 +14,9 @@ const h = vi.hoisted(() => {
     },
     fakeSocket: { connected: true, on: vi.fn(), off: vi.fn() },
     emitCashout: vi.fn(),
+    emitCancelBet: vi.fn(),
+    emitQueueNext: vi.fn(),
+    emitCancelNext: vi.fn(),
   }
 })
 
@@ -21,6 +24,9 @@ vi.mock('../../services/socket', () => ({
   on: h.on,
   getSocket: () => h.fakeSocket,
   emitCashout: h.emitCashout,
+  emitCancelBet: h.emitCancelBet,
+  emitQueueNext: h.emitQueueNext,
+  emitCancelNext: h.emitCancelNext,
 }))
 
 vi.mock('../../services/historyApi', () => ({

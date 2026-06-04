@@ -133,7 +133,7 @@ describe('BetService.queueNextBet', () => {
     expect(redisMock.hset).not.toHaveBeenCalled()
   })
 
-  it('rejects when the slot already has a bet this round', async () => {
+  it('rejects when the slot already has an active bet this round', async () => {
     redisMock.get
       .mockResolvedValueOnce('RUNNING') // phase
       .mockResolvedValueOnce('round1') // currentRound
@@ -142,6 +142,16 @@ describe('BetService.queueNextBet', () => {
       code: ErrorCode.BET_QUEUE_NOT_ALLOWED,
     })
     expect(redisMock.hset).not.toHaveBeenCalled()
+  })
+
+  it('allows queueing after the current-round bet was cashed out', async () => {
+    redisMock.get
+      .mockResolvedValueOnce('RUNNING') // phase
+      .mockResolvedValueOnce('round1') // currentRound
+    mockBetRepo.findBySlot.mockResolvedValueOnce(makeBet({ status: 'CASHED_OUT' }))
+    const result = await service.queueNextBet('user1', 'USD', 1, 50, null)
+    expect(result).toEqual({ slotId: 1, amount: 50, autoCashOut: null })
+    expect(redisMock.hset).toHaveBeenCalledWith('queue:next', 'user1:1', JSON.stringify({ amount: 50, autoCashOut: null, currency: 'USD' }))
   })
 
   it('stores the intent (with currency) in the queue hash when mid-round and slot is free', async () => {

@@ -48,12 +48,14 @@ export function BettingPanel({
 
   const isWaiting = phase === 'WAITING'
   const isMidRound = phase === 'RUNNING' || phase === 'CRASHED'
+  const hasActiveBet = bet?.status === 'PLACED'
+  const canUseInputs = !bet || (isMidRound && !hasActiveBet)
   const canPlace = authed && isWaiting && !bet && isValidAmount && !autoCashOutError && !pending
-  const canQueue = authed && isMidRound && !bet && !queued && isValidAmount && !autoCashOutError && !pending
-  const isPlaced = bet?.status === 'PLACED'
-  const canCashOut = phase === 'RUNNING' && isPlaced
-  const canCancelBet = phase === 'WAITING' && isPlaced
-  const inputsDisabled = !authed || !!bet || !!queued || pending !== null
+  const canQueue = authed && isMidRound && canUseInputs && !queued && isValidAmount && !autoCashOutError && !pending
+  const canCashOut = phase === 'RUNNING' && hasActiveBet
+  const canCancelBet = phase === 'WAITING' && hasActiveBet
+  const inputsDisabled = !authed || !canUseInputs || !!queued || pending !== null
+  const showInputs = canUseInputs && !queued
 
   function handlePlace() {
     if (!canPlace) return
@@ -69,16 +71,14 @@ export function BettingPanel({
     <div className="bg-gray-800 rounded-2xl p-4 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Slot {slotId}</span>
-        {bet ? <StatusBadge slot={slot} phase={phase} /> : queued ? <span className="text-xs font-semibold text-blue-400">Next round</span> : null}
+        {queued ? <span className="text-xs font-semibold text-blue-400">Next round</span> : bet ? <StatusBadge slot={slot} phase={phase} /> : null}
       </div>
 
-      {/* Resolved/active bet summary, queued next-round summary, or inputs */}
-      {bet ? (
-        <BetSummary slot={slot} phase={phase} currentMultiplier={currentMultiplier} currency={currency} />
-      ) : queued ? (
-        <QueuedSummary queued={queued} currency={currency} />
-      ) : (
-        <>
+      {bet && <BetSummary slot={slot} phase={phase} currentMultiplier={currentMultiplier} currency={currency} />}
+      {queued && <QueuedSummary queued={queued} currency={currency} />}
+
+      {showInputs && (
+        <div className="space-y-3">
           <input
             type="number"
             min="1"
@@ -116,7 +116,7 @@ export function BettingPanel({
               </button>
             ))}
           </div>
-        </>
+        </div>
       )}
 
       {/* Action button */}
@@ -138,7 +138,7 @@ export function BettingPanel({
         >
           {pending === 'canceling' ? 'Canceling…' : 'Cancel bet'}
         </button>
-      ) : bet ? null : queued ? (
+      ) : queued ? (
         <button
           onClick={() => onCancelNext(slotId)}
           disabled={pending === 'canceling'}
@@ -161,7 +161,7 @@ export function BettingPanel({
         >
           {pending === 'placing' ? 'Placing…' : 'Place Bet'}
         </button>
-      ) : (
+      ) : hasActiveBet ? null : (
         <button
           onClick={handleQueue}
           disabled={!canQueue}
