@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "dev": "nest start --watch",
+    "dev": "nest start --watch --no-shell",
     "build": "nest build",
     "start": "node dist/main",
     "typecheck": "tsc --noEmit",

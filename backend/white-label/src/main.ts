@@ -19,7 +19,7 @@ async function bootstrap() {
     logger: ['error', 'warn', 'log'],
     rawBody: true,
   });
-
+  app.enableShutdownHooks();
   // CSP/COEP are disabled: the lobby is server-rendered HTML with an inline
   // script and embeds the game frontend (a different origin) in an iframe. This
   // is a simulator; framing permission for the game lives on the frontend (CSP

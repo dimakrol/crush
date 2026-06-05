@@ -58,6 +58,11 @@ services:
       LAUNCH_TOKEN_TTL_SECONDS: 60
       INITIAL_DEMO_BALANCE: 100000
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-5274}
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: 500
+      WATCHPACK_POLLING: "true"
+      TSC_WATCHFILE: PriorityPollingInterval
+      TSC_WATCHDIRECTORY: FixedPollingInterval
     ports:
       - "${WHITELABEL_PORT:-4200}:4000"
     volumes:
@@ -86,6 +91,11 @@ services:
       OPERATOR_API_KEY: ${OPERATOR_API_KEY:-dev-operator-key}
       OPERATOR_SECRET: ${OPERATOR_SECRET:-dev-operator-secret-change-me}
       GAME_ID: crash-pilot
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: 500
+      WATCHPACK_POLLING: "true"
+      TSC_WATCHFILE: PriorityPollingInterval
+      TSC_WATCHDIRECTORY: FixedPollingInterval
     ports:
       - "${BACKEND_PORT:-4100}:4000"
     volumes:

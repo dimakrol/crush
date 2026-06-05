@@ -2,8 +2,8 @@ import './config/env'; // validates env vars on startup
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { connectMongo } from './config/database';
-import { connectRedis } from './config/redis';
+import { closeMongo, connectMongo } from './config/database';
+import { closeRedis, connectRedis } from './config/redis';
 import { env } from './config/env';
 import { AppModule } from './app.module';
 import { logger } from './shared/utils/logger';
@@ -31,6 +31,27 @@ async function bootstrap() {
 
   await app.listen(env.PORT);
   logger.info(`Server started on port ${env.PORT}`);
+
+
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    logger.info(`Received ${signal}, shutting down`);
+    try {
+      await app.close();
+      await closeRedis();
+      await closeMongo();
+      process.exit(0);
+    } catch (err) {
+      console.error('Failed to shut down cleanly:', err);
+      process.exit(1);
+    }
+  };
+
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  process.once('SIGINT', () => void shutdown('SIGINT'));
 }
 
 bootstrap().catch((err) => {
