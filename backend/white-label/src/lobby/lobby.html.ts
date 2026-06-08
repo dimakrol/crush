@@ -29,8 +29,6 @@ export const LOBBY_HTML = `<!doctype html>
     .game h3 { margin: 0 0 6px; }
     .hidden { display: none; }
     .error { color: #f85149; font-size: 13px; margin-top: 10px; min-height: 16px; }
-    .frame-wrap { margin-top: 20px; }
-    iframe { width: 100%; height: 640px; border: 1px solid #21262d; border-radius: 10px; background: #000; }
     .muted { color: #9aa4b2; font-size: 13px; }
   </style>
 </head>
@@ -65,16 +63,12 @@ export const LOBBY_HTML = `<!doctype html>
         <div class="error" id="lobbyError"></div>
       </div>
 
-      <div class="frame-wrap hidden" id="frameWrap">
-        <iframe id="gameFrame" sandbox="allow-scripts allow-same-origin"
-          allow="autoplay"></iframe>
-      </div>
     </section>
   </main>
 
   <script>
     var STORAGE_KEY = 'whiteLabelLobby.session';
-    var state = { token: null, player: null, gameOrigin: null };
+    var state = { token: null, player: null, gameOrigin: null, gameWindow: null };
 
     function fmt(minor, currency) {
       return (minor / 100).toFixed(2) + ' ' + currency;
@@ -90,8 +84,6 @@ export const LOBBY_HTML = `<!doctype html>
     function showLogin() {
       document.getElementById('loginView').classList.remove('hidden');
       document.getElementById('lobbyView').classList.add('hidden');
-      document.getElementById('frameWrap').classList.add('hidden');
-      document.getElementById('gameFrame').src = 'about:blank';
       renderPlayer();
     }
 
@@ -113,6 +105,7 @@ export const LOBBY_HTML = `<!doctype html>
       state.token = null;
       state.player = null;
       state.gameOrigin = null;
+      state.gameWindow = null;
       localStorage.removeItem(STORAGE_KEY);
     }
 
@@ -178,8 +171,14 @@ export const LOBBY_HTML = `<!doctype html>
         var data = await res.json();
         if (!res.ok) throw new Error((data.error && data.error.message) || 'Launch failed');
         state.gameOrigin = new URL(data.gameUrl).origin;
-        document.getElementById('gameFrame').src = data.gameUrl;
-        document.getElementById('frameWrap').classList.remove('hidden');
+        // Launch the game in a dedicated window. It posts balance updates back
+        // to this lobby via window.opener (see frontend lobbyBridge).
+        var gameWindow = window.open(data.gameUrl, 'crashpilot-game');
+        if (!gameWindow) {
+          throw new Error('Pop-up blocked — allow pop-ups for this site to launch the game.');
+        }
+        state.gameWindow = gameWindow;
+        gameWindow.focus();
       } catch (e) {
         if (String(e.message || '').toLowerCase().includes('session') || String(e.message || '').toLowerCase().includes('unauthorized')) {
           clearSession();
@@ -199,8 +198,9 @@ export const LOBBY_HTML = `<!doctype html>
         saveSession();
         renderPlayer();
       } else if (msg.type === 'crashpilot:sessionEnded') {
-        document.getElementById('frameWrap').classList.add('hidden');
-        document.getElementById('gameFrame').src = 'about:blank';
+        if (state.gameWindow && !state.gameWindow.closed) state.gameWindow.close();
+        state.gameWindow = null;
+        state.gameOrigin = null;
       }
     });
 
