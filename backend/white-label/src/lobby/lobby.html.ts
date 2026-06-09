@@ -73,6 +73,7 @@ export const LOBBY_HTML = `<!doctype html>
   </main>
 
   <script>
+    var STORAGE_KEY = 'whiteLabelLobby.session';
     var state = { token: null, player: null, gameOrigin: null };
 
     function fmt(minor, currency) {
@@ -84,6 +85,59 @@ export const LOBBY_HTML = `<!doctype html>
       if (!state.player) { bar.textContent = ''; return; }
       bar.innerHTML = state.player.displayName + ' — <b>' +
         fmt(state.player.balance, state.player.currency) + '</b>';
+    }
+
+    function showLogin() {
+      document.getElementById('loginView').classList.remove('hidden');
+      document.getElementById('lobbyView').classList.add('hidden');
+      document.getElementById('frameWrap').classList.add('hidden');
+      document.getElementById('gameFrame').src = 'about:blank';
+      renderPlayer();
+    }
+
+    function showLobby() {
+      renderPlayer();
+      document.getElementById('loginView').classList.add('hidden');
+      document.getElementById('lobbyView').classList.remove('hidden');
+    }
+
+    function saveSession() {
+      if (!state.token || !state.player) return;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        token: state.token,
+        player: state.player,
+      }));
+    }
+
+    function clearSession() {
+      state.token = null;
+      state.player = null;
+      state.gameOrigin = null;
+      localStorage.removeItem(STORAGE_KEY);
+    }
+
+    async function restoreSession() {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      try {
+        var saved = JSON.parse(raw);
+        if (!saved || !saved.token) throw new Error('Missing token');
+        state.token = saved.token;
+        state.player = saved.player || null;
+        if (state.player) showLobby();
+
+        var res = await fetch('/auth/me', {
+          headers: { 'Authorization': 'Bearer ' + state.token },
+        });
+        var data = await res.json();
+        if (!res.ok) throw new Error((data.error && data.error.message) || 'Session expired');
+        state.player = data.player;
+        saveSession();
+        showLobby();
+      } catch (e) {
+        clearSession();
+        showLogin();
+      }
     }
 
     async function login() {
@@ -102,9 +156,8 @@ export const LOBBY_HTML = `<!doctype html>
         if (!res.ok) throw new Error((data.error && data.error.message) || 'Login failed');
         state.token = data.token;
         state.player = data.player;
-        renderPlayer();
-        document.getElementById('loginView').classList.add('hidden');
-        document.getElementById('lobbyView').classList.remove('hidden');
+        saveSession();
+        showLobby();
       } catch (e) {
         err.textContent = e.message;
       }
@@ -128,6 +181,10 @@ export const LOBBY_HTML = `<!doctype html>
         document.getElementById('gameFrame').src = data.gameUrl;
         document.getElementById('frameWrap').classList.remove('hidden');
       } catch (e) {
+        if (String(e.message || '').toLowerCase().includes('session') || String(e.message || '').toLowerCase().includes('unauthorized')) {
+          clearSession();
+          showLogin();
+        }
         err.textContent = e.message;
       }
     }
@@ -139,6 +196,7 @@ export const LOBBY_HTML = `<!doctype html>
       if (msg.type === 'crashpilot:balanceChanged' && state.player) {
         if (typeof msg.balance === 'number') state.player.balance = msg.balance;
         if (msg.currency) state.player.currency = msg.currency;
+        saveSession();
         renderPlayer();
       } else if (msg.type === 'crashpilot:sessionEnded') {
         document.getElementById('frameWrap').classList.add('hidden');
@@ -148,6 +206,7 @@ export const LOBBY_HTML = `<!doctype html>
 
     document.getElementById('loginBtn').addEventListener('click', login);
     document.getElementById('playBtn').addEventListener('click', play);
+    restoreSession();
   </script>
 </body>
 </html>`;

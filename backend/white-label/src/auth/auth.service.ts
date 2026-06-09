@@ -12,14 +12,17 @@ export interface LobbyJwtPayload {
   displayName: string;
 }
 
-export interface LoginResult {
-  token: string;
+export interface LobbyPlayerSession {
   player: {
     id: string;
     displayName: string;
     currency: string;
     balance: number;
   };
+}
+
+export interface LoginResult extends LobbyPlayerSession {
+  token: string;
 }
 
 @Injectable()
@@ -56,9 +59,31 @@ export class AuthService {
       expiresIn: env.LOBBY_JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
     });
 
-    const wallet = player.wallets[0];
     return {
       token,
+      ...this.toPlayerSession(player),
+    };
+  }
+
+  async me(playerId: string): Promise<LobbyPlayerSession> {
+    const player = await this.prisma.player.findUnique({
+      where: { id: playerId },
+      include: { wallets: true },
+    });
+    if (!player) {
+      throw new AppError(401, ErrorCode.UNAUTHORIZED, 'Invalid session token');
+    }
+
+    return this.toPlayerSession(player);
+  }
+
+  private toPlayerSession(player: {
+    id: string;
+    displayName: string;
+    wallets: { currency: string; balance: bigint }[];
+  }): LobbyPlayerSession {
+    const wallet = player.wallets[0];
+    return {
       player: {
         id: player.id,
         displayName: player.displayName,
