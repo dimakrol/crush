@@ -6,6 +6,7 @@ import { HealthController } from './health/health.controller';
 import { WalletModule } from './wallet/wallet.module';
 import { PlayersModule } from './players/players.module';
 import { AuthModule } from './auth/auth.module';
+import { CashierModule } from './cashier/cashier.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { LobbyModule } from './lobby/lobby.module';
 
@@ -15,6 +16,7 @@ import { LobbyModule } from './lobby/lobby.module';
     WalletModule,
     PlayersModule,
     AuthModule,
+    CashierModule,
     SessionsModule,
     LobbyModule,
   ],

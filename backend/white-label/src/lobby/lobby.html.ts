@@ -29,7 +29,11 @@ export const LOBBY_HTML = `<!doctype html>
     .game h3 { margin: 0 0 6px; }
     .hidden { display: none; }
     .error { color: #f85149; font-size: 13px; margin-top: 10px; min-height: 16px; }
+    .ok { color: #58d6a0; font-size: 13px; margin-top: 10px; min-height: 16px; }
     .muted { color: #9aa4b2; font-size: 13px; }
+    .cashier { margin-top: 16px; }
+    .cashier .row { display: flex; gap: 12px; margin-top: 12px; }
+    .cashier .row button { margin-top: 0; }
   </style>
 </head>
 <body>
@@ -63,6 +67,16 @@ export const LOBBY_HTML = `<!doctype html>
         <div class="error" id="lobbyError"></div>
       </div>
 
+      <div class="card cashier">
+        <h2>Cashier</h2>
+        <label for="cashierAmount">Amount (<span id="cashierCurrency"></span>)</label>
+        <input id="cashierAmount" type="number" min="0.01" step="0.01" value="10.00" />
+        <div class="row">
+          <button class="ghost" id="depositBtn">Deposit</button>
+          <button class="ghost" id="withdrawBtn">Withdraw</button>
+        </div>
+        <div class="error" id="cashierMsg"></div>
+      </div>
     </section>
   </main>
 
@@ -79,6 +93,8 @@ export const LOBBY_HTML = `<!doctype html>
       if (!state.player) { bar.textContent = ''; return; }
       bar.innerHTML = state.player.displayName + ' — <b>' +
         fmt(state.player.balance, state.player.currency) + '</b>';
+      var cur = document.getElementById('cashierCurrency');
+      if (cur) cur.textContent = state.player.currency;
     }
 
     function showLogin() {
@@ -188,6 +204,47 @@ export const LOBBY_HTML = `<!doctype html>
       }
     }
 
+    // Deposit / withdraw against the lobby account. The UI works in decimal
+    // units; the wallet API is integer minor units, so convert at this seam.
+    async function cashier(kind) {
+      var msg = document.getElementById('cashierMsg');
+      msg.className = 'error';
+      msg.textContent = '';
+      var dollars = parseFloat(document.getElementById('cashierAmount').value);
+      if (!isFinite(dollars) || dollars <= 0) {
+        msg.textContent = 'Enter a positive amount.';
+        return;
+      }
+      var amount = Math.round(dollars * 100);
+      try {
+        var res = await fetch('/cashier/' + kind, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + state.token,
+          },
+          body: JSON.stringify({ amount: amount }),
+        });
+        var data = await res.json();
+        if (!res.ok) throw new Error((data.error && data.error.message) || (kind + ' failed'));
+        if (state.player) {
+          state.player.balance = data.balance;
+          state.player.currency = data.currency;
+          saveSession();
+          renderPlayer();
+        }
+        msg.className = 'ok';
+        msg.textContent = (kind === 'deposit' ? 'Deposited ' : 'Withdrew ') +
+          fmt(amount, data.currency) + '.';
+      } catch (e) {
+        if (String(e.message || '').toLowerCase().includes('session') || String(e.message || '').toLowerCase().includes('unauthorized')) {
+          clearSession();
+          showLogin();
+        }
+        msg.textContent = e.message;
+      }
+    }
+
     // Parent side of the postMessage channel — validate origin before trusting.
     window.addEventListener('message', function (event) {
       if (!state.gameOrigin || event.origin !== state.gameOrigin) return;
@@ -206,6 +263,8 @@ export const LOBBY_HTML = `<!doctype html>
 
     document.getElementById('loginBtn').addEventListener('click', login);
     document.getElementById('playBtn').addEventListener('click', play);
+    document.getElementById('depositBtn').addEventListener('click', function () { cashier('deposit'); });
+    document.getElementById('withdrawBtn').addEventListener('click', function () { cashier('withdraw'); });
     restoreSession();
   </script>
 </body>
