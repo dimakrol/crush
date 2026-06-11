@@ -2,6 +2,7 @@ import { BetService } from '@/modules/bets/bet.service'
 import { IBetRepository } from '@/modules/bets/bet.repository.interface'
 import { WalletService } from '@/modules/wallet/wallet.service'
 import { AppError } from '@/shared/errors/AppError'
+import { DuplicateKeyError } from '@/shared/errors/duplicate-key.error'
 import { ErrorCode } from '@/shared/errors/error-codes'
 import { Bet } from '@/modules/bets/bet.types'
 
@@ -118,7 +119,9 @@ describe('BetService.placeBet', () => {
       .mockResolvedValueOnce('round1')
     mockBetRepo.findBySlot.mockResolvedValueOnce(null)
     ;(mockWalletService.debit as jest.Mock).mockResolvedValueOnce({ balance: 950 })
-    mockBetRepo.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    // The repository is the seam that translates a native dup-key (Mongo 11000 /
+    // Postgres 23505) into a driver-agnostic DuplicateKeyError.
+    mockBetRepo.create.mockRejectedValueOnce(new DuplicateKeyError())
     await expect(service.placeBet('user1', 'USD', 1, 50, null)).rejects.toMatchObject({ code: ErrorCode.BET_ALREADY_EXISTS })
     expect(mockWalletService.rollback).not.toHaveBeenCalled()
   })

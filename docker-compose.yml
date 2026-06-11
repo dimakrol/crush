@@ -34,6 +34,9 @@ services:
       POSTGRES_DB: whitelabel
     volumes:
       - pg_data:/var/lib/postgresql/data
+      # Creates the platform's `crash_pilot` database alongside `whitelabel`.
+      # Runs only on a fresh pg_data volume.
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U whitelabel -d whitelabel"]
       interval: 10s
@@ -76,13 +79,21 @@ services:
   backend:
     build:
       context: ./backend/platform
+    # node_modules self-heal on dep changes lives in the image's
+    # docker-entrypoint.sh (re-runs `npm ci` when package-lock.json changed),
+    # so no command: override is needed here.
     env_file:
       - ./backend/platform/.env
     # Container-network routing overrides (these win over env_file).
     # Everything else (JWT secret, round params) comes from the .env file above.
     environment:
       PORT: 4000
+      # Data-access driver (mongo|postgres) is taken from .env (env_file) so it
+      # is NOT overridden here — editing backend/platform/.env is enough to
+      # switch. Only the connection strings are pinned to the container network
+      # below (both provided; only the active driver's is used).
       MONGODB_URI: mongodb://mongo:27017/crash_pilot
+      POSTGRES_URL: postgresql://whitelabel:whitelabel@postgres:5432/crash_pilot
       REDIS_URL: redis://redis:6379
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-5274}
       # Seamless-wallet client: reach the white-label over the container network.
@@ -103,6 +114,8 @@ services:
       - /app/node_modules
     depends_on:
       mongo:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy

@@ -1,8 +1,22 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ObjectId } from 'mongodb';
 import { getDb } from '@/config/database';
+import {
+  DuplicateKeyError,
+  isMongoDuplicateKey,
+} from '@/shared/errors/duplicate-key.error';
 import { IBetRepository } from './bet.repository.interface';
 import { Bet, BetSlotId } from './bet.types';
+
+// Composite keyset cursor `${placedAt ISO}|${id}` — same format as the Postgres
+// repo so the pagination contract is driver-independent and stable when several
+// bets share a placedAt.
+const encodeCursor = (placedAt: Date, id: string) =>
+  `${placedAt.toISOString()}|${id}`;
+const decodeCursor = (cursor: string): { placedAt: Date; id: string } => {
+  const idx = cursor.lastIndexOf('|');
+  return { placedAt: new Date(cursor.slice(0, idx)), id: cursor.slice(idx + 1) };
+};
 
 @Injectable()
 export class MongoBetRepository implements IBetRepository, OnModuleInit {
@@ -24,15 +38,22 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
   }
 
   async create(data: Omit<Bet, 'id'>): Promise<Bet> {
-    const result = await getDb()
-      .collection('bets')
-      .insertOne({
-        ...data,
-        // userId is the white-label player UUID — stored as a plain string, not
-        // a Mongo ObjectId. roundId is an internal Mongo round id.
-        roundId: new ObjectId(data.roundId),
-      });
-    return { id: result.insertedId.toHexString(), ...data };
+    try {
+      const result = await getDb()
+        .collection('bets')
+        .insertOne({
+          ...data,
+          // userId is the white-label player UUID — stored as a plain string,
+          // not a Mongo ObjectId. roundId is an internal Mongo round id.
+          roundId: new ObjectId(data.roundId),
+        });
+      return { id: result.insertedId.toHexString(), ...data };
+    } catch (err) {
+      // Unique (round,user,slot) violation → driver-agnostic signal so the
+      // service's slot-race handling never inspects the Mongo error code.
+      if (isMongoDuplicateKey(err)) throw new DuplicateKeyError();
+      throw err;
+    }
   }
 
   async findBySlot(
@@ -76,18 +97,26 @@ export class MongoBetRepository implements IBetRepository, OnModuleInit {
     cursor?: string,
   ): Promise<{ bets: Bet[]; nextCursor: string | null }> {
     const query: Record<string, unknown> = { userId };
-    if (cursor) query.placedAt = { $lt: new Date(cursor) };
+    if (cursor) {
+      // Keyset over (placedAt desc, _id desc): the page after the cursor is
+      // placedAt < c.placedAt OR (placedAt = c.placedAt AND _id < c._id).
+      const c = decodeCursor(cursor);
+      query.$or = [
+        { placedAt: { $lt: c.placedAt } },
+        { placedAt: c.placedAt, _id: { $lt: new ObjectId(c.id) } },
+      ];
+    }
     const docs = await getDb()
       .collection('bets')
       .find(query)
-      .sort({ placedAt: -1 })
+      .sort({ placedAt: -1, _id: -1 })
       .limit(limit + 1)
       .toArray();
     const hasMore = docs.length > limit;
     const bets = docs.slice(0, limit).map((d) => this.toBet(d));
-    const nextCursor = hasMore
-      ? bets[bets.length - 1].placedAt.toISOString()
-      : null;
+    const last = bets[bets.length - 1];
+    const nextCursor =
+      hasMore && last ? encodeCursor(last.placedAt, last.id) : null;
     return { bets, nextCursor };
   }
 

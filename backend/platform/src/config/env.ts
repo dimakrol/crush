@@ -13,7 +13,14 @@ const envSchema = z.object({
     .enum(['development', 'production', 'test'])
     .default('development'),
   PORT: z.coerce.number().default(4000),
-  MONGODB_URI: z.string().min(1),
+
+  // Data-access driver selector. Exactly one backs the persisted domains
+  // (bets/rounds) at a time; only its connection string is required (enforced
+  // by the superRefine below). Defaults to mongo to preserve existing setups.
+  DB_DRIVER: z.enum(['mongo', 'postgres']).default('mongo'),
+  MONGODB_URI: z.string().min(1).optional(),
+  POSTGRES_URL: z.string().min(1).optional(),
+
   REDIS_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(1),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
@@ -29,6 +36,22 @@ const envSchema = z.object({
   OPERATOR_API_KEY: z.string().min(1).default('dev-operator-key'),
   OPERATOR_SECRET: z.string().min(1).default('dev-operator-secret-change-me'),
   GAME_ID: z.string().default('crash-pilot'),
+}).superRefine((cfg, ctx) => {
+  // Require only the active driver's connection string.
+  if (cfg.DB_DRIVER === 'mongo' && !cfg.MONGODB_URI) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['MONGODB_URI'],
+      message: 'MONGODB_URI is required when DB_DRIVER=mongo',
+    });
+  }
+  if (cfg.DB_DRIVER === 'postgres' && !cfg.POSTGRES_URL) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['POSTGRES_URL'],
+      message: 'POSTGRES_URL is required when DB_DRIVER=postgres',
+    });
+  }
 });
 
 const result = envSchema.safeParse(process.env);

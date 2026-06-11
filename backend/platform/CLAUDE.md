@@ -28,12 +28,15 @@ docker compose up -d   # mongo + redis + postgres + white-label
 This is the **game backend** — round engine, bets, history, real-time socket. It is **no longer
 the money or identity authority**. Balance, transactions, and player identity live in
 `backend/white-label/`; this service is a **thin client** of the white-label's seamless-wallet
-and launch-token APIs. Mongo still backs bets/rounds/history; the wallet collection is retired.
+and launch-token APIs. Bets/rounds/history are backed by Mongo **or** Postgres
+(see *Data-access driver*); the wallet collection is retired.
 See `docs/white-label-integration-plan.md` (repo root) for the full design.
 
 ## Architecture
 
-**Stack:** NestJS 11 on Express, native MongoDB driver (no Mongoose), ioredis, Zod validation, Socket.IO via `@WebSocketGateway`, JWT auth.
+**Stack:** NestJS 11 on Express, **pluggable data-access layer** (Mongo via the native driver, or Postgres via Drizzle — selected by `DB_DRIVER`), ioredis, Zod validation, Socket.IO via `@WebSocketGateway`, JWT auth.
+
+**Data-access driver** — `DB_DRIVER=mongo|postgres` (default `mongo`) picks the backing store for the persisted domains (`bets`, `rounds`) globally; exactly one is active per process. Each repository module wires its implementation via `useFactory` reading `env.DB_DRIVER` (`Mongo*Repository` / `Postgres*Repository`), both satisfying the same `IFooRepository`. Only the active driver connects (`main.ts` branches: `connectMongo()` vs `connectPostgres()`+`migratePostgres()`; both `close*` guarded in shutdown). `env.ts` requires only the active driver's URL (`MONGODB_URI` / `POSTGRES_URL`) via a `superRefine`. Postgres specifics: ids are DB-generated `uuid` (domain stays `id: string`); money is `numeric(20,4)` cast back to `number` in the mapper; `cashOut` is `UPDATE ... WHERE status='PLACED' RETURNING` (the analogue of Mongo's `findOneAndUpdate` guard); the unique `(round,user,slot)` violation and Mongo's `11000` both translate to a driver-agnostic `DuplicateKeyError` (`shared/errors/`) that `BetService` catches by `instanceof`. Schema is `src/drizzle/schema.ts`; migrations are committed under `drizzle/migrations` (`npm run db:generate`) and applied on boot. `findByUser` uses a composite keyset cursor `${placedAt ISO}|${id}` — **same format in both drivers**. PG repos have a real-DB smoke test (`tests/bets/postgres.smoke.spec.ts`, opt-in via `RUN_PG_SMOKE=1`).
 
 **Module layout** (`src/modules/`):
 - `auth/` — **launch-token exchange**, not register/login. `POST /api/auth/launch { token }`
@@ -64,7 +67,7 @@ back. `OPERATOR_API_KEY`/`OPERATOR_SECRET` **must match the white-label's**.
 
 ## Key patterns
 
-**Repository injection tokens** — every module exposes a `FOO_REPOSITORY` string token and an `IFooRepository` interface, swapped in via `{ provide: FOO_REPOSITORY, useClass: ... }`. Tests inject `jest.Mocked<IFooRepository>` directly. The wallet's implementation is now `HttpWalletRepository` (calls the white-label), not a Mongo one.
+**Repository injection tokens** — every module exposes a `FOO_REPOSITORY` string token and an `IFooRepository` interface. `bets`/`rounds` swap in their implementation via `useFactory` on `env.DB_DRIVER` (Mongo or Postgres — see *Data-access driver*); other modules use `useClass`. Tests inject `jest.Mocked<IFooRepository>` directly. The wallet's implementation is `HttpWalletRepository` (calls the white-label), not a DB one.
 
 **Redis game state** — `game:phase` (`WAITING|RUNNING|CRASHED`), `game:currentRound`, `game:currentMultiplier` are the only Redis keys. `BetService` reads these directly; no event bus.
 

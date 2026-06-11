@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common'
 import { env } from '@/config/env'
 import { getRedis } from '@/config/redis'
 import { AppError } from '@/shared/errors/AppError'
+import { DuplicateKeyError } from '@/shared/errors/duplicate-key.error'
 import { ErrorCode } from '@/shared/errors/error-codes'
 import { logger } from '@/shared/utils/logger'
 import { calculatePayout, isValidBetAmount } from '@/shared/utils/money'
@@ -20,8 +21,6 @@ const queueField = (userId: string, slotId: BetSlotId) => `${userId}:${slotId}`
 // to one effect — across retries, races, and restart recovery.
 const betTxRef = (roundId: string, userId: string, slotId: BetSlotId) => `${roundId}:${userId}:${slotId}:bet`
 const winTxRef = (roundId: string, userId: string, slotId: BetSlotId) => `${roundId}:${userId}:${slotId}:win`
-
-const isDuplicateKey = (err: unknown): boolean => (err as { code?: number }).code === 11000
 
 interface QueuedIntent {
   amount: number
@@ -81,7 +80,7 @@ export class BetService {
       // A concurrent request won the unique (round,user,slot) slot. It shares
       // this exact txRef, so the white-label already collapsed both debits into
       // one effect that the winner owns — we must NOT roll it back here.
-      if (isDuplicateKey(err)) {
+      if (err instanceof DuplicateKeyError) {
         throw new AppError(409, ErrorCode.BET_ALREADY_EXISTS, `Slot ${slotId} already has a bet this round`)
       }
       await this.walletService.rollback({ playerId: userId, currency, refTxRef: txRef }).catch((rbErr) => {

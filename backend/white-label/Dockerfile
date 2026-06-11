@@ -21,5 +21,8 @@ COPY . .
 
 EXPOSE 4000
 
+# Entrypoint self-heals the node_modules volume (deps + generated Prisma client)
+# before running the CMD — see docker-entrypoint.sh.
+ENTRYPOINT ["./docker-entrypoint.sh"]
 # Apply committed migrations, seed demo players (idempotent), then watch.
 CMD ["sh", "-c", "npx prisma migrate deploy && npm run seed && npm run dev"]
