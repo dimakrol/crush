@@ -170,20 +170,16 @@ export class BetService {
     return this.betRepo.findByUser(userId, limit, cursor)
   }
 
-  // Tick-safe: marks auto-cashout-eligible bets as CASHED_OUT (a local DB
-  // write at the crossing multiplier) and returns them. NO wallet calls here —
-  // the winnings are credited after the tick loop ends (see RoundEngine).
+  // Tick-safe: marks auto-cashout-eligible bets as CASHED_OUT at the crossing
+  // multiplier and returns them. ONE statement, no per-bet round-trips — this
+  // runs inside the 100ms tick. NO wallet calls here either: the winnings are
+  // credited after the tick loop ends (see RoundEngine).
+  //
+  // The payout comes back from the row the database wrote, so what the player is
+  // told and what gets credited can't drift apart.
   async markAutoCashouts(roundId: string, multiplier: number): Promise<{ bet: Bet; payout: number }[]> {
-    const bets = await this.betRepo.findActiveByRound(roundId)
-    const results: { bet: Bet; payout: number }[] = []
-    for (const bet of bets) {
-      if (bet.autoCashOut !== null && multiplier >= bet.autoCashOut) {
-        const payout = calculatePayout(bet.amount, multiplier)
-        const updated = await this.betRepo.cashOut(bet.id, multiplier, payout)
-        if (updated) results.push({ bet: updated, payout })
-      }
-    }
-    return results
+    const cashedOut = await this.betRepo.cashOutAuto(roundId, multiplier)
+    return cashedOut.map((bet) => ({ bet, payout: bet.payout }))
   }
 
   async resolveLosses(roundId: string): Promise<Bet[]> {

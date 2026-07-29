@@ -1,5 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { and, desc, eq, lt, or } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  isNotNull,
+  lt,
+  lte,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { getDrizzle } from '@/config/postgres';
 import { bets } from '@/drizzle/schema';
 import {
@@ -63,6 +74,10 @@ export class BetRepository implements IBetRepository {
     }
   }
 
+  // Must stay aligned with the PARTIAL unique index (`status <> 'REJECTED'`):
+  // a refused stake keeps its audit row but does NOT occupy the slot, so
+  // reporting it here would 409 the player before the index ever gets a say —
+  // making the partial predicate pointless.
   async findBySlot(
     roundId: string,
     userId: string,
@@ -76,18 +91,11 @@ export class BetRepository implements IBetRepository {
           eq(bets.roundId, roundId),
           eq(bets.userId, userId),
           eq(bets.slotId, slotId),
+          ne(bets.status, 'REJECTED'),
         ),
       )
       .limit(1);
     return row ? this.toBet(row) : null;
-  }
-
-  async findActiveByRound(roundId: string): Promise<Bet[]> {
-    const rows = await getDrizzle()
-      .select()
-      .from(bets)
-      .where(and(eq(bets.roundId, roundId), eq(bets.status, 'PLACED')));
-    return rows.map((r) => this.toBet(r));
   }
 
   async findActiveByUser(userId: string, roundId: string): Promise<Bet[]> {
@@ -109,7 +117,12 @@ export class BetRepository implements IBetRepository {
     limit: number,
     cursor?: string,
   ): Promise<{ bets: Bet[]; nextCursor: string | null }> {
-    const userCond = eq(bets.userId, userId);
+    // Player-facing history: PENDING_STAKE and REJECTED are traces of the stake
+    // handshake, not bets the player ever owned — they must not show up.
+    const userCond = and(
+      eq(bets.userId, userId),
+      notInArray(bets.status, ['PENDING_STAKE', 'REJECTED']),
+    );
     // Keyset: rows ordered (placedAt desc, id desc); the page after the cursor
     // is placedAt < c.placedAt OR (placedAt = c.placedAt AND id < c.id).
     const where = cursor
@@ -157,6 +170,38 @@ export class BetRepository implements IBetRepository {
       .where(and(eq(bets.id, betId), eq(bets.status, 'PLACED')))
       .returning();
     return row ? this.toBet(row) : null;
+  }
+
+  // Set-based auto-cashout: resolves every eligible bet of the round in one
+  // round-trip. Runs inside the 100ms tick, which a per-bet loop would stall.
+  //
+  // The payout expression MUST stay bit-identical to calculatePayout()
+  // (`Math.floor(amount * multiplier * 100) / 100`), or an auto-cashout and a
+  // manual one at the same multiplier would pay different amounts. Hence the
+  // explicit `::double precision`: it makes the product IEEE-754 float64 in the
+  // same left-to-right order as JS, so `floor` truncates at the same boundary.
+  // Only the final division is numeric, so the stored value is an exact decimal.
+  async cashOutAuto(roundId: string, multiplier: number): Promise<Bet[]> {
+    const now = new Date();
+    const rows = await getDrizzle()
+      .update(bets)
+      .set({
+        status: 'CASHED_OUT',
+        cashOutMultiplier: multiplier,
+        payout: sql`floor("amount"::double precision * ${multiplier} * 100)::numeric / 100`,
+        cashedOutAt: now,
+        resolvedAt: now,
+      })
+      .where(
+        and(
+          eq(bets.roundId, roundId),
+          eq(bets.status, 'PLACED'),
+          isNotNull(bets.autoCashOut),
+          lte(bets.autoCashOut, multiplier),
+        ),
+      )
+      .returning();
+    return rows.map((r) => this.toBet(r));
   }
 
   async cancelPlaced(betId: string, userId: string): Promise<Bet | null> {
