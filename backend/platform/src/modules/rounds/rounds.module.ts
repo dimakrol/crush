@@ -1,19 +1,14 @@
 import { Module } from '@nestjs/common';
-import { env } from '@/config/env';
-import { MongoRoundRepository } from './round.repository.mongo';
-import { PostgresRoundRepository } from './round.repository.postgres';
+import { RoundRepository } from './round.repository';
 import { ROUND_REPOSITORY } from './round.repository.interface';
 
 @Module({
   providers: [
     {
-      // The active driver (env.DB_DRIVER) picks the implementation; both
-      // satisfy IRoundRepository so everything downstream is driver-agnostic.
+      // Postgres is the only store; the token + interface stay so services
+      // never see Drizzle and unit tests can inject a mock.
       provide: ROUND_REPOSITORY,
-      useFactory: () =>
-        env.DB_DRIVER === 'postgres'
-          ? new PostgresRoundRepository()
-          : new MongoRoundRepository(),
+      useClass: RoundRepository,
     },
   ],
   exports: [ROUND_REPOSITORY],

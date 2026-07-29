@@ -2,10 +2,10 @@ import './config/env'; // validates env vars on startup
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { closeMongo, connectMongo } from './config/database';
 import {
   closePostgres,
   connectPostgres,
+  ensureDatabase,
   migratePostgres,
 } from './config/postgres';
 import { closeRedis, connectRedis } from './config/redis';
@@ -14,14 +14,11 @@ import { AppModule } from './app.module';
 import { logger } from './shared/utils/logger';
 
 async function bootstrap() {
-  // Connect only the active driver. Postgres also applies migrations on boot
-  // (the analogue of the Mongo repos creating indexes in onModuleInit).
-  if (env.DB_DRIVER === 'postgres') {
-    await connectPostgres();
-    await migratePostgres();
-  } else {
-    await connectMongo();
-  }
+  // Bootstrap order matters: the database must exist before we connect to it,
+  // and the schema must be migrated before the app serves traffic.
+  await ensureDatabase();
+  await connectPostgres();
+  await migratePostgres();
   await connectRedis();
 
   const app = await NestFactory.create(AppModule, {
@@ -54,11 +51,7 @@ async function bootstrap() {
     try {
       await app.close();
       await closeRedis();
-      if (env.DB_DRIVER === 'postgres') {
-        await closePostgres();
-      } else {
-        await closeMongo();
-      }
+      await closePostgres();
       process.exit(0);
     } catch (err) {
       console.error('Failed to shut down cleanly:', err);

@@ -5,7 +5,7 @@ An Aviator-style crash game. A multiplier climbs from 1×; players cash out befo
 The game is embedded as an **iframe player inside a white-label casino lobby**. The white-label
 is the **money and identity authority** (balance, transactions, players, launch sessions); the
 game backend is server-authoritative for *gameplay* but delegates every money move to the
-white-label over a seamless-wallet API. Full design: `docs/white-label-integration-plan.md`.
+white-label over a seamless-wallet API. Design details live in each service's `CLAUDE.md`.
 
 ## Repository layout
 
@@ -13,14 +13,13 @@ white-label over a seamless-wallet API. Full design: `docs/white-label-integrati
 backend/white-label/   NestJS + Prisma + Postgres — money + identity authority, lobby HTML
 backend/platform/      NestJS API + game engine (thin wallet/auth client of the white-label)
 frontend/crash-pilot/  React 19 + Vite UI (iframe player)
-docs/                  white-label-integration-plan.md (design source of truth)
 scripts/               whitelabel-smoke.mjs (end-to-end money-chain smoke)
 ```
 
 ## Prerequisites
 
 - Node.js 20+
-- Docker (for MongoDB + Redis + Postgres + the white-label service)
+- Docker (for Postgres + Redis + the white-label service)
 
 ## Getting started
 
@@ -32,11 +31,13 @@ the platform depends on it).
 ### 1. Infrastructure
 
 ```bash
-docker compose up -d mongo redis postgres
+docker compose up -d postgres redis
 ```
 
-Starts MongoDB on `27117`, Redis on `6479`, Postgres on `5532` (non-default host ports). Point
-each service's local `.env` at those ports, or run them on the standard ports yourself.
+Starts Postgres on `5532` and Redis on `6479` (non-default host ports). Point each service's
+local `.env` at those ports, or run them on the standard ports yourself. Both services keep
+their own database on that one Postgres server: `whitelabel` and `crash_pilot` (the platform
+creates its own on boot if missing).
 
 ### 2. White-label (money authority)
 
@@ -68,7 +69,7 @@ npm run dev                 # http://localhost:5174 (open it via the lobby, not 
 
 ## Run the full stack with Docker
 
-A root `docker-compose.yml` runs everything — Mongo, Redis, Postgres, the
+A root `docker-compose.yml` runs everything — Postgres, Redis, the
 white-label, the game backend, and the frontend — in containers with hot reload
 (source is bind-mounted):
 
@@ -82,7 +83,7 @@ the frontend at `http://localhost:5274` directly shows a guest spectator view �
 there's no balance until you launch from the lobby.)
 
 Host ports are deliberately non-standard so the stack runs **alongside** any
-local `npm run dev`, `mongod`, `redis`, or `postgres` without colliding. Override
+local `npm run dev`, `redis`, or `postgres` without colliding. Override
 them via a root `.env` (copy `.env.example`):
 
 | Service | URL / host port (default) | Override var |
@@ -90,14 +91,13 @@ them via a root `.env` (copy `.env.example`):
 | Casino lobby (white-label) | http://localhost:4200/lobby | `WHITELABEL_PORT` |
 | Frontend (game iframe) | http://localhost:5274 | `FRONTEND_PORT` |
 | Game backend (API + Socket.IO) | http://localhost:4100 | `BACKEND_PORT` |
-| MongoDB | `localhost:27117` | `MONGO_PORT` |
 | Redis | `localhost:6479` | `REDIS_PORT` |
 | Postgres | `localhost:5532` | `PG_PORT` |
 
 Notes:
 
 - The game backend reads `backend/platform/.env` for app config; Compose overrides
-  `MONGODB_URI`, `REDIS_URL`, `CORS_ORIGIN`, and the white-label wiring
+  `POSTGRES_URL`, `REDIS_URL`, `CORS_ORIGIN`, and the white-label wiring
   (`WALLET_API_URL`, `OPERATOR_*`). Make sure `backend/platform/.env` exists.
 - `OPERATOR_API_KEY` / `OPERATOR_SECRET` are the shared HMAC credentials between
   the platform and the white-label — they **must match** on both sides (Compose
@@ -106,7 +106,7 @@ Notes:
   rebuild: `docker compose up --build`. Some changes need a restart of the affected
   container to take effect (Nest's watcher doesn't always reap its old process;
   Vite's HMR won't re-emit `server.headers`) — `docker restart crush-<service>-1`.
-- Mongo data persists in `mongo_data`, Postgres in `pg_data`; Redis is ephemeral
+- Postgres data (both databases) persists in `pg_data`; Redis is ephemeral
   (it only holds live round state, which the engine rebuilds).
 
 ### Smoke test
@@ -141,7 +141,7 @@ service's `.env.example` for the full list; the load-bearing ones:
 
 | Variable | Description |
 |---|---|
-| `MONGODB_URI` / `REDIS_URL` | Mongo (bets/rounds) + Redis (live round state) |
+| `POSTGRES_URL` / `REDIS_URL` | Postgres (bets/rounds) + Redis (live round state) |
 | `JWT_ACCESS_SECRET` / `JWT_ACCESS_EXPIRES_IN` | Platform session JWT |
 | `WALLET_API_URL` | White-label base URL (server-to-server) |
 | `OPERATOR_API_KEY` / `OPERATOR_SECRET` | Wallet HMAC — must match the white-label |
@@ -163,13 +163,14 @@ the game. See `backend/white-label/CLAUDE.md`.
 
 ### Platform (`backend/platform/`)
 
-NestJS on Express with native MongoDB (no Mongoose) and ioredis — the **game backend**, and a
-**thin client** of the white-label for money/identity. Modules: `auth` (launch-token exchange →
-platform JWT), `wallet` (HTTP client of the white-label), `bets`, `rounds`, `history`. A
-`GameModule` runs `RoundEngine` (WAITING → RUNNING → CRASHED); `SocketModule` hosts the Socket.IO
-gateway. Crash point `Math.max(1.01, 0.99 / Math.random())`; multiplier `e^(0.06 × t)`. Redis
-holds live game state; MongoDB stores rounds and bets (no wallet, no users — identity is the
-white-label's UUID). See `backend/platform/CLAUDE.md`.
+NestJS on Express with Postgres (Drizzle ORM, migrations applied on boot) and ioredis — the
+**game backend**, and a **thin client** of the white-label for money/identity. Modules: `auth`
+(launch-token exchange → platform JWT), `wallet` (HTTP client of the white-label), `bets`,
+`rounds`, `history`. A `GameModule` runs `RoundEngine` (WAITING → RUNNING → CRASHED);
+`SocketModule` hosts the Socket.IO gateway. Crash point `Math.max(1.01, 0.99 / Math.random())`;
+multiplier `e^(0.06 × t)`. Redis holds ephemeral live round state; Postgres stores rounds and
+bets (no wallet, no users — identity is the white-label's UUID).
+See `backend/platform/CLAUDE.md`.
 
 ### Frontend (`frontend/crash-pilot/`)
 

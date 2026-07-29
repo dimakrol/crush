@@ -1,19 +1,19 @@
-// PG smoke test — exercises the Postgres repositories against a REAL database
-// to verify the atomic semantics that unit tests (which mock the repo) can't:
-// the compare-and-set cashOut, the unique-slot dup-key translation, and the
+// PG smoke test — exercises the repositories against a REAL database to verify
+// the atomic semantics that unit tests (which mock the repo) can't: the
+// compare-and-set cashOut, the unique-slot dup-key translation, and the
 // composite-cursor pagination. Opt-in only, so `npm test` stays infra-free:
 //
 //   docker compose up -d postgres
 //   RUN_PG_SMOKE=1 PG_SMOKE_URL=postgresql://whitelabel:whitelabel@localhost:5532/crash_pilot \
 //     npm test -- --testPathPattern=postgres.smoke
 //
-// The env vars are set BEFORE importing the app modules so env.ts validates on
-// the postgres branch; modules are loaded via dynamic import inside beforeAll.
+// PG_SMOKE_URL is set BEFORE importing the app modules so env.ts sees it;
+// modules are loaded via dynamic import inside beforeAll.
 
 const RUN = process.env.RUN_PG_SMOKE
 const describePg = RUN ? describe : describe.skip
 
-describePg('PostgresBetRepository / PostgresRoundRepository (smoke)', () => {
+describePg('BetRepository / RoundRepository (smoke)', () => {
   let betRepo: any
   let roundRepo: any
   let connectPostgres: () => Promise<unknown>
@@ -25,7 +25,6 @@ describePg('PostgresBetRepository / PostgresRoundRepository (smoke)', () => {
   let rounds: any
 
   beforeAll(async () => {
-    process.env.DB_DRIVER = 'postgres'
     process.env.POSTGRES_URL =
       process.env.PG_SMOKE_URL ?? 'postgresql://whitelabel:whitelabel@localhost:5532/crash_pilot'
 
@@ -36,13 +35,13 @@ describePg('PostgresBetRepository / PostgresRoundRepository (smoke)', () => {
     getDrizzle = pg.getDrizzle
     ;({ DuplicateKeyError } = await import('@/shared/errors/duplicate-key.error'))
     ;({ bets, rounds } = await import('@/drizzle/schema'))
-    const { PostgresBetRepository } = await import('@/modules/bets/bet.repository.postgres')
-    const { PostgresRoundRepository } = await import('@/modules/rounds/round.repository.postgres')
+    const { BetRepository } = await import('@/modules/bets/bet.repository')
+    const { RoundRepository } = await import('@/modules/rounds/round.repository')
 
     await connectPostgres()
     await migratePostgres()
-    betRepo = new PostgresBetRepository()
-    roundRepo = new PostgresRoundRepository()
+    betRepo = new BetRepository()
+    roundRepo = new RoundRepository()
   })
 
   afterAll(async () => {

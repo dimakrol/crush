@@ -105,9 +105,9 @@ describe('BetService.placeBet', () => {
       .mockResolvedValueOnce('round1')
     mockBetRepo.findBySlot.mockResolvedValueOnce(null)
     ;(mockWalletService.debit as jest.Mock).mockResolvedValueOnce({ balance: 950 })
-    mockBetRepo.create.mockRejectedValueOnce(new Error('mongo down'))
+    mockBetRepo.create.mockRejectedValueOnce(new Error('database down'))
     ;(mockWalletService.rollback as jest.Mock).mockResolvedValueOnce({ balance: 1000 })
-    await expect(service.placeBet('user1', 'USD', 1, 50, null)).rejects.toThrow('mongo down')
+    await expect(service.placeBet('user1', 'USD', 1, 50, null)).rejects.toThrow('database down')
     expect(mockWalletService.rollback).toHaveBeenCalledWith(
       expect.objectContaining({ playerId: 'user1', currency: 'USD', refTxRef: 'round1:user1:1:bet' }),
     )
@@ -119,8 +119,8 @@ describe('BetService.placeBet', () => {
       .mockResolvedValueOnce('round1')
     mockBetRepo.findBySlot.mockResolvedValueOnce(null)
     ;(mockWalletService.debit as jest.Mock).mockResolvedValueOnce({ balance: 950 })
-    // The repository is the seam that translates a native dup-key (Mongo 11000 /
-    // Postgres 23505) into a driver-agnostic DuplicateKeyError.
+    // The repository is the seam that translates the native unique violation
+    // (Postgres SQLSTATE 23505) into a storage-agnostic DuplicateKeyError.
     mockBetRepo.create.mockRejectedValueOnce(new DuplicateKeyError())
     await expect(service.placeBet('user1', 'USD', 1, 50, null)).rejects.toMatchObject({ code: ErrorCode.BET_ALREADY_EXISTS })
     expect(mockWalletService.rollback).not.toHaveBeenCalled()

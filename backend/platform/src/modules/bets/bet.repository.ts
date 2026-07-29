@@ -12,8 +12,7 @@ import { Bet, BetSlotId } from './bet.types';
 type BetRow = typeof bets.$inferSelect;
 
 // Composite keyset cursor `${placedAt ISO}|${id}` — stable pagination with no
-// skips/dupes when several bets share a placedAt (the Mongo repo uses the same
-// format so the API contract is driver-independent).
+// skips/dupes when several bets share a placedAt.
 const encodeCursor = (placedAt: Date, id: string) =>
   `${placedAt.toISOString()}|${id}`;
 const decodeCursor = (cursor: string): { placedAt: Date; id: string } => {
@@ -21,12 +20,12 @@ const decodeCursor = (cursor: string): { placedAt: Date; id: string } => {
   return { placedAt: new Date(cursor.slice(0, idx)), id: cursor.slice(idx + 1) };
 };
 
-// Postgres implementation of IBetRepository. Interchangeable with
-// MongoBetRepository behind the BET_REPOSITORY token. Atomic compare-and-set
-// (cashOut/cancelPlaced) uses UPDATE ... WHERE status='PLACED' RETURNING, the
-// exact analogue of Mongo's findOneAndUpdate guard.
+// Postgres implementation of IBetRepository, bound to the BET_REPOSITORY token.
+// Every write is a single statement: atomic compare-and-set (cashOut /
+// cancelPlaced) is UPDATE ... WHERE status='PLACED' RETURNING, so concurrent
+// callers can never both win.
 @Injectable()
-export class PostgresBetRepository implements IBetRepository {
+export class BetRepository implements IBetRepository {
   async findById(id: string): Promise<Bet | null> {
     const [row] = await getDrizzle()
       .select()

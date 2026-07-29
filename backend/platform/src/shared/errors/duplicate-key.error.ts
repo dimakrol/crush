@@ -1,18 +1,13 @@
-// Driver-agnostic "unique key already exists" signal. Each repository
-// implementation translates its native code into this so the service layer
-// (e.g. the place-bet slot race in BetService) never inspects a Mongo error
-// number or a Postgres SQLSTATE directly. Treat this as the seam: services
-// catch `instanceof DuplicateKeyError`, repositories produce it.
+// Storage-agnostic "unique key already exists" signal. The repository layer
+// translates the native error into this so the service layer (e.g. the
+// place-bet slot race in BetService) never inspects a Postgres SQLSTATE
+// directly. Treat this as the seam: services catch `instanceof
+// DuplicateKeyError`, repositories produce it.
 export class DuplicateKeyError extends Error {
   constructor(message = 'Duplicate key') {
     super(message);
     this.name = 'DuplicateKeyError';
   }
-}
-
-// Mongo surfaces a duplicate-key write as error code 11000.
-export function isMongoDuplicateKey(err: unknown): boolean {
-  return (err as { code?: number }).code === 11000;
 }
 
 // Postgres surfaces a unique-violation as SQLSTATE 23505 (a string code).

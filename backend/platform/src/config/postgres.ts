@@ -5,20 +5,48 @@ import { resolve } from 'path';
 import { env } from './env';
 import * as schema from '../drizzle/schema';
 
-// Symmetric with config/database.ts (Mongo): a module-level singleton connected
-// imperatively from main.ts before NestFactory. Only the active driver
-// (env.DB_DRIVER) is ever connected, so this stays cold when DB_DRIVER=mongo.
+// The single long-lived store. A module-level singleton connected imperatively
+// from main.ts before NestFactory, so a bad connection string fails the boot
+// instead of surfacing as a runtime error on the first request.
 
 let pool: Pool;
 let db: NodePgDatabase<typeof schema>;
 
 export type Drizzle = NodePgDatabase<typeof schema>;
 
+// Create the platform's database if it does not exist yet, connecting to the
+// `postgres` maintenance database on the same server. Without this the first
+// boot depends on the Compose initdb script, which only runs on a *fresh*
+// pg_data volume — an existing volume (the common case) would never get
+// `crash_pilot` and every start would fail.
+export async function ensureDatabase(): Promise<void> {
+  const url = new URL(env.POSTGRES_URL);
+  const dbName = decodeURIComponent(url.pathname.replace(/^\//, ''));
+  if (!dbName) throw new Error('POSTGRES_URL has no database name');
+
+  url.pathname = '/postgres';
+  const admin = new Pool({ connectionString: url.toString() });
+  try {
+    const { rowCount } = await admin.query(
+      'SELECT 1 FROM pg_database WHERE datname = $1',
+      [dbName],
+    );
+    if (rowCount) return;
+    // CREATE DATABASE takes no bind parameters — quote the identifier instead.
+    // dbName comes from our own env; doubling embedded quotes keeps it safe.
+    await admin.query(`CREATE DATABASE "${dbName.replace(/"/g, '""')}"`);
+    console.log(`✅ Postgres database "${dbName}" created`);
+  } catch (err) {
+    // 42P04 = duplicate_database: another process won the race, which is fine.
+    if ((err as { code?: string }).code !== '42P04') throw err;
+  } finally {
+    await admin.end();
+  }
+}
+
 export async function connectPostgres(): Promise<Drizzle> {
-  // POSTGRES_URL is guaranteed present here: env.ts superRefine requires it
-  // whenever DB_DRIVER=postgres, and we only call this on that branch.
   pool = new Pool({ connectionString: env.POSTGRES_URL });
-  // Fail fast if Postgres is unreachable, mirroring connectMongo()'s connect().
+  // Fail fast if Postgres is unreachable rather than on the first query.
   await pool.query('SELECT 1');
   db = drizzle(pool, { schema });
   console.log('✅ Postgres connected');
@@ -26,9 +54,8 @@ export async function connectPostgres(): Promise<Drizzle> {
 }
 
 // Apply drizzle-kit-generated migrations on boot, before the app serves
-// traffic — the Postgres analogue of the Mongo repos creating their indexes in
-// onModuleInit. The folder is resolved relative to the compiled file so it
-// works from both ts-node (src) and dist.
+// traffic — the schema and its indexes are owned by the committed migrations,
+// not by any onModuleInit hook.
 export async function migratePostgres(): Promise<void> {
   // Migrations live at the package root (drizzle/migrations) and are not
   // compiled into dist — resolve from cwd so the path is identical whether

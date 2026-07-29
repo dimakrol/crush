@@ -170,7 +170,7 @@ export class BetService {
     return this.betRepo.findByUser(userId, limit, cursor)
   }
 
-  // Tick-safe: marks auto-cashout-eligible bets as CASHED_OUT (a fast Mongo
+  // Tick-safe: marks auto-cashout-eligible bets as CASHED_OUT (a local DB
   // write at the crossing multiplier) and returns them. NO wallet calls here —
   // the winnings are credited after the tick loop ends (see RoundEngine).
   async markAutoCashouts(roundId: string, multiplier: number): Promise<{ bet: Bet; payout: number }[]> {

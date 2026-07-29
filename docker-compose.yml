@@ -1,18 +1,4 @@
 services:
-  mongo:
-    image: mongo:7
-    ports:
-      - "${MONGO_PORT:-27117}:27017"
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    restart: unless-stopped
-
   redis:
     image: redis:7
     ports:
@@ -34,9 +20,9 @@ services:
       POSTGRES_DB: whitelabel
     volumes:
       - pg_data:/var/lib/postgresql/data
-      # Creates the platform's `crash_pilot` database alongside `whitelabel`.
-      # Runs only on a fresh pg_data volume.
-      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+      # The platform's `crash_pilot` database is created by the platform itself
+      # on boot (ensureDatabase) — no initdb script, which would only ever run
+      # on a fresh volume anyway.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U whitelabel -d whitelabel"]
       interval: 10s
@@ -88,11 +74,6 @@ services:
     # Everything else (JWT secret, round params) comes from the .env file above.
     environment:
       PORT: 4000
-      # Data-access driver (mongo|postgres) is taken from .env (env_file) so it
-      # is NOT overridden here — editing backend/platform/.env is enough to
-      # switch. Only the connection strings are pinned to the container network
-      # below (both provided; only the active driver's is used).
-      MONGODB_URI: mongodb://mongo:27017/crash_pilot
       POSTGRES_URL: postgresql://whitelabel:whitelabel@postgres:5432/crash_pilot
       REDIS_URL: redis://redis:6379
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-5274}
@@ -113,8 +94,6 @@ services:
       - ./backend/platform:/app
       - /app/node_modules
     depends_on:
-      mongo:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -143,5 +122,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  mongo_data:
   pg_data:

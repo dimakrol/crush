@@ -20,7 +20,7 @@ npm run lint         # eslint with --fix
 
 Start infrastructure before running the app:
 ```bash
-docker compose up -d   # mongo + redis + postgres + white-label
+docker compose up -d   # postgres + redis + white-label
 ```
 
 ## Role
@@ -28,15 +28,15 @@ docker compose up -d   # mongo + redis + postgres + white-label
 This is the **game backend** — round engine, bets, history, real-time socket. It is **no longer
 the money or identity authority**. Balance, transactions, and player identity live in
 `backend/white-label/`; this service is a **thin client** of the white-label's seamless-wallet
-and launch-token APIs. Bets/rounds/history are backed by Mongo **or** Postgres
-(see *Data-access driver*); the wallet collection is retired.
-See `docs/white-label-integration-plan.md` (repo root) for the full design.
+and launch-token APIs. Bets/rounds/history are backed by Postgres (see *Persistence*); the
+wallet and users collections are retired. This file is the design source of truth for the
+platform side; the operator side is `backend/white-label/CLAUDE.md`.
 
 ## Architecture
 
-**Stack:** NestJS 11 on Express, **pluggable data-access layer** (Mongo via the native driver, or Postgres via Drizzle — selected by `DB_DRIVER`), ioredis, Zod validation, Socket.IO via `@WebSocketGateway`, JWT auth.
+**Stack:** NestJS 11 on Express, **Postgres via Drizzle ORM** (the only long-lived store), ioredis, Zod validation, Socket.IO via `@WebSocketGateway`, JWT auth.
 
-**Data-access driver** — `DB_DRIVER=mongo|postgres` (default `mongo`) picks the backing store for the persisted domains (`bets`, `rounds`) globally; exactly one is active per process. Each repository module wires its implementation via `useFactory` reading `env.DB_DRIVER` (`Mongo*Repository` / `Postgres*Repository`), both satisfying the same `IFooRepository`. Only the active driver connects (`main.ts` branches: `connectMongo()` vs `connectPostgres()`+`migratePostgres()`; both `close*` guarded in shutdown). `env.ts` requires only the active driver's URL (`MONGODB_URI` / `POSTGRES_URL`) via a `superRefine`. Postgres specifics: ids are DB-generated `uuid` (domain stays `id: string`); money is `numeric(20,4)` cast back to `number` in the mapper; `cashOut` is `UPDATE ... WHERE status='PLACED' RETURNING` (the analogue of Mongo's `findOneAndUpdate` guard); the unique `(round,user,slot)` violation and Mongo's `11000` both translate to a driver-agnostic `DuplicateKeyError` (`shared/errors/`) that `BetService` catches by `instanceof`. Schema is `src/drizzle/schema.ts`; migrations are committed under `drizzle/migrations` (`npm run db:generate`) and applied on boot. `findByUser` uses a composite keyset cursor `${placedAt ISO}|${id}` — **same format in both drivers**. PG repos have a real-DB smoke test (`tests/bets/postgres.smoke.spec.ts`, opt-in via `RUN_PG_SMOKE=1`).
+**Persistence** — Postgres holds the persisted domains (`bets`, `rounds`); `POSTGRES_URL` is required and the process refuses to boot without it. Bootstrap in `main.ts` is strictly ordered: `ensureDatabase()` → `connectPostgres()` → `migratePostgres()`, mirrored by `closePostgres()` in shutdown. `ensureDatabase()` connects to the `postgres` maintenance DB on the same server and `CREATE DATABASE`s `crash_pilot` if absent — the stack no longer depends on a Compose initdb script, which only ever ran on a *fresh* `pg_data` volume. Schema is `src/drizzle/schema.ts`; migrations are committed under `drizzle/migrations` (`npm run db:generate`) and applied on boot, so no repository creates indexes in `onModuleInit`. Specifics: ids are DB-generated `uuid` (domain stays `id: string`); money is `numeric(20,4)` cast back to `number` in the mapper; multipliers/crash point are `double precision` (not money); `userId` is `text` (a white-label UUID, no FK). Every write is a **single statement** — `cashOut`/`cancelPlaced` are `UPDATE ... WHERE status='PLACED' RETURNING`, so concurrent callers can't both win. A unique `(round,user,slot)` violation (SQLSTATE `23505`) is translated to a storage-agnostic `DuplicateKeyError` (`shared/errors/`) that `BetService` catches by `instanceof`. `findByUser` uses a composite keyset cursor `${placedAt ISO}|${id}`. Repos have a real-DB smoke test (`tests/bets/postgres.smoke.spec.ts`, opt-in via `RUN_PG_SMOKE=1` — note it writes into the dev `crash_pilot` DB).
 
 **Module layout** (`src/modules/`):
 - `auth/` — **launch-token exchange**, not register/login. `POST /api/auth/launch { token }`
@@ -67,28 +67,28 @@ back. `OPERATOR_API_KEY`/`OPERATOR_SECRET` **must match the white-label's**.
 
 ## Key patterns
 
-**Repository injection tokens** — every module exposes a `FOO_REPOSITORY` string token and an `IFooRepository` interface. `bets`/`rounds` swap in their implementation via `useFactory` on `env.DB_DRIVER` (Mongo or Postgres — see *Data-access driver*); other modules use `useClass`. Tests inject `jest.Mocked<IFooRepository>` directly. The wallet's implementation is `HttpWalletRepository` (calls the white-label), not a DB one.
+**Repository injection tokens** — every module exposes a `FOO_REPOSITORY` string token and an `IFooRepository` interface, all wired with `useClass`. The seam is kept even with a single store: it confines Drizzle to `*.repository.ts` and lets tests inject `jest.Mocked<IFooRepository>` directly. The wallet's implementation is `HttpWalletRepository` (calls the white-label), not a DB one.
 
 **Redis game state** — `game:phase` (`WAITING|RUNNING|CRASHED`), `game:currentRound`, `game:currentMultiplier` are the only Redis keys. `BetService` reads these directly; no event bus.
 
 **Money moves are delegated, with idempotent `txRef`** — `BetService` builds a deterministic
 `txRef` at each call site: `{roundId}:{playerId}:{slot}:bet` for the stake debit,
 `{roundId}:{playerId}:{slot}:win` for the cashout credit. The white-label dedupes on `txRef`,
-so a retry never double-spends or double-pays. `playerId` is a white-label **UUID**;
-`MongoBetRepository` stores `userId` as a **plain string** (only `roundId` stays an ObjectId).
+so a retry never double-spends or double-pays. `playerId` is a white-label **UUID**, stored in
+`bets.user_id` as `text`.
 
-**Money ordering & failure handling** (`docs/...-plan.md` §2.12):
+**Money ordering & failure handling:**
 - **Bet:** white-label `debit` **first**, then persist the bet. Debit fails → reject. Bet-create
-  fails after debit → `rollback` (skipped on a dup-key `11000` — a concurrent winner already owns
-  the shared idempotent debit).
-- **Credit:** mark the bet resolved (idempotent `{ status: 'PLACED' }` guard) before crediting.
-- **Tick decoupling:** the 100ms tick only *detects and marks* auto-cashouts (fast Mongo write at
+  fails after debit → `rollback` (skipped on a `DuplicateKeyError` — a concurrent winner already
+  owns the shared idempotent debit).
+- **Credit:** mark the bet resolved (compare-and-set on `status='PLACED'`) before crediting.
+- **Tick decoupling:** the 100ms tick only *detects and marks* auto-cashouts (a local DB write at
   the crossing multiplier) + broadcasts; **`credit` network calls drain after `clearInterval`,
   never inside the tick.** `creditWin` retries 3× bounded → `SETTLEMENT_PENDING` (no auto-sweep;
   idempotency makes a later manual replay safe).
 - **Recovery:** on engine init, `recoverOpenBets` rolls back `PLACED` debits for an open round.
 
-**Idempotent cashout** — `betRepo.cashOut` uses `findOneAndUpdate` with `{ status: 'PLACED' }` condition so concurrent cashout requests don't double-credit.
+**Idempotent cashout** — `betRepo.cashOut` is `UPDATE ... WHERE id=$1 AND status='PLACED' RETURNING *`, so concurrent cashout requests can't double-credit: the loser gets zero rows back.
 
 **No cross-service transaction** — there is no transactional guarantee across the platform↔white-label boundary by design; safety rests entirely on **idempotent `txRef`** + the fail-safe ordering above. Treat `txRef` determinism as load-bearing.
 

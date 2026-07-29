@@ -84,10 +84,10 @@ export class RoundEngine implements OnModuleInit {
     logger.info('Round RUNNING', { roundId: round.id, crashPoint: round.crashPoint })
     this.gateway.emitToAll('round:started', { roundId: round.id, phase: 'RUNNING', startedAt })
 
-    // Auto-cashouts are detected and marked inside the tick (fast Mongo write),
+    // Auto-cashouts are detected and marked inside the tick (a local DB write),
     // but their wallet credits are deferred: the 100ms tick must never block on
     // a network call to the operator. Each marked cashout is collected here and
-    // credited after the interval is cleared (§2.12).
+    // credited after the interval is cleared.
     const pendingCredits: { bet: Bet; payout: number }[] = []
 
     await new Promise<void>((resolve) => {

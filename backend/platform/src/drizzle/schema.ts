@@ -12,8 +12,8 @@ import {
 
 // Postgres mirror of the domain persisted by the platform. The single source of
 // truth for the contract stays the `IRoundRepository`/`IBetRepository`
-// interfaces — this schema must round-trip those domain shapes exactly so the
-// Mongo and Postgres drivers are interchangeable behind the repository tokens.
+// interfaces — this schema must round-trip those domain shapes exactly, since
+// the repositories are the only place allowed to see it.
 //
 // Money (amount/payout) is numeric(20,4) for precise at-rest storage; the
 // repository mapper casts it back to the domain's `number`. Multipliers and the
@@ -37,8 +37,8 @@ export const bets = pgTable(
   'bets',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    // White-label player UUID — a plain string, mirrors the Mongo repo which
-    // stores userId as a string (not an ObjectId).
+    // White-label player UUID. Stored as text, not uuid: it is an identifier
+    // owned by another service and there is no FK to enforce here.
     userId: text('user_id').notNull(),
     currency: text('currency').notNull().default('USD'),
     roundId: uuid('round_id')

@@ -111,5 +111,6 @@ Validated at startup (`src/config/env.ts`); the server exits if any is missing. 
 
 - **`nest start --watch` in Docker doesn't reap the old process on reload** → `EADDRINUSE`, and
   stale code keeps serving. After editing, `docker restart crush-white-label-1` to pick up changes.
-- `playerId` is a Postgres **UUID**; the platform's Mongo bets store it as a plain string.
+- `playerId` is a Postgres **UUID**; the platform stores it as `text` in its own database (a
+  separate DB on the same server — there is no FK across the service boundary).
 - Demo players: `demo1/demo1`, `demo2/demo2` (seeded, no self-registration in the lobby).

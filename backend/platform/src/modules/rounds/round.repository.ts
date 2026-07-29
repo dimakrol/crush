@@ -7,12 +7,11 @@ import { Round, GamePhase } from './round.types';
 
 type RoundRow = typeof rounds.$inferSelect;
 
-// Postgres implementation of IRoundRepository. Interchangeable with
-// MongoRoundRepository behind the ROUND_REPOSITORY token. Schema/indexes are
-// owned by the committed migrations (applied on boot), so there is no
-// onModuleInit index creation here.
+// Postgres implementation of IRoundRepository, bound to the ROUND_REPOSITORY
+// token. Schema/indexes are owned by the committed migrations (applied on boot),
+// so there is no index creation in onModuleInit here.
 @Injectable()
-export class PostgresRoundRepository implements IRoundRepository {
+export class RoundRepository implements IRoundRepository {
   async findById(id: string): Promise<Round | null> {
     const [row] = await getDrizzle()
       .select()

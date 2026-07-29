@@ -1,7 +1,5 @@
 import { Module } from '@nestjs/common';
-import { env } from '@/config/env';
-import { MongoBetRepository } from './bet.repository.mongo';
-import { PostgresBetRepository } from './bet.repository.postgres';
+import { BetRepository } from './bet.repository';
 import { BET_REPOSITORY } from './bet.repository.interface';
 import { BetService } from './bet.service';
 import { BetController } from './bet.controller';
@@ -11,13 +9,10 @@ import { WalletModule } from '../wallet/wallet.module';
   imports: [WalletModule],
   providers: [
     {
-      // The active driver (env.DB_DRIVER) picks the implementation; both
-      // satisfy IBetRepository so everything downstream is driver-agnostic.
+      // Postgres is the only store; the token + interface stay so services
+      // never see Drizzle and unit tests can inject a mock.
       provide: BET_REPOSITORY,
-      useFactory: () =>
-        env.DB_DRIVER === 'postgres'
-          ? new PostgresBetRepository()
-          : new MongoBetRepository(),
+      useClass: BetRepository,
     },
     BetService,
   ],
