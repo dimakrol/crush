@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A **white-label casino operator simulator** — the **money and identity authority** for the
-crash game. The game (`backend/platform` + `frontend/crash-pilot`) embeds in this operator's
+crash game. The game (`platform` + `frontend/crash-pilot`) embeds in this operator's
 lobby iframe and delegates every money move here over a seamless-wallet API. Balances,
 transactions, players, and launch sessions all live in this service's Postgres.
 

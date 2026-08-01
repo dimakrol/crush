@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# Self-heal the node_modules volume (see backend/platform/docker-entrypoint.sh
+# Self-heal the node_modules volume (see platform/docker-entrypoint.sh
 # for the core rationale: the volume persists across image rebuilds and only
 # seeds on first creation, so a dependency change leaves the stale volume
 # shadowing the freshly built node_modules).

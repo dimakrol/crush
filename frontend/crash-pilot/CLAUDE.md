@@ -18,8 +18,8 @@ npx vitest run src/services/__tests__/api.test.ts
 
 ## Architecture
 
-Aviator-style crash game **embedded as an iframe player inside the `backend/white-label` casino
-lobby**. The game backend (`backend/platform`) is fully server-authoritative — it generates crash
+Aviator-style crash game **embedded as an iframe player inside the `white-label` casino
+lobby**. The game backend (`platform`) is fully server-authoritative — it generates crash
 points, drives the WAITING→RUNNING→CRASHED loop, ticks the multiplier every 100ms, and runs
 auto-cashout — and pushes everything over Socket.IO. **This frontend is a passive renderer of that
 server state.** The white-label (not this app) owns money and identity; see

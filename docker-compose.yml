@@ -33,7 +33,7 @@ services:
 
   white-label:
     build:
-      context: ./backend/white-label
+      context: ./white-label
     # Container-network routing overrides win over the image's .env defaults.
     environment:
       PORT: 4000
@@ -55,7 +55,7 @@ services:
     ports:
       - "${WHITELABEL_PORT:-4200}:4000"
     volumes:
-      - ./backend/white-label:/app
+      - ./white-label:/app
       - /app/node_modules
     depends_on:
       postgres:
@@ -64,12 +64,12 @@ services:
 
   backend:
     build:
-      context: ./backend/platform
+      context: ./platform
     # node_modules self-heal on dep changes lives in the image's
     # docker-entrypoint.sh (re-runs `npm ci` when package-lock.json changed),
     # so no command: override is needed here.
     env_file:
-      - ./backend/platform/.env
+      - ./platform/.env
     # Container-network routing overrides (these win over env_file).
     # Everything else (JWT secret, round params) comes from the .env file above.
     environment:
@@ -93,7 +93,7 @@ services:
     ports:
       - "${BACKEND_PORT:-4100}:4000"
     volumes:
-      - ./backend/platform:/app
+      - ./platform:/app
       - /app/node_modules
     depends_on:
       postgres:

@@ -10,8 +10,8 @@ white-label over a seamless-wallet API. Design details live in each service's `C
 ## Repository layout
 
 ```
-backend/white-label/   NestJS + Prisma + Postgres — money + identity authority, lobby HTML
-backend/platform/      NestJS API + game engine (thin wallet/auth client of the white-label)
+white-label/           NestJS + Prisma + Postgres — money + identity authority, lobby HTML
+platform/              NestJS API + game engine (thin wallet/auth client of the white-label)
 frontend/crash-pilot/  React 19 + Vite UI (iframe player)
 scripts/               whitelabel-smoke.mjs (end-to-end money-chain smoke)
 ```
@@ -42,7 +42,7 @@ creates its own on boot if missing).
 ### 2. White-label (money authority)
 
 ```bash
-cd backend/white-label
+cd white-label
 cp .env.example .env
 npm install
 npm run prisma:migrate      # apply schema to Postgres
@@ -53,7 +53,7 @@ npm run dev                 # http://localhost:4000  (lobby at /lobby)
 ### 3. Platform (game backend)
 
 ```bash
-cd backend/platform
+cd platform
 cp .env.example .env        # OPERATOR_API_KEY / OPERATOR_SECRET must match the white-label
 npm install
 npm run dev                 # http://localhost:4000
@@ -96,9 +96,9 @@ them via a root `.env` (copy `.env.example`):
 
 Notes:
 
-- The game backend reads `backend/platform/.env` for app config; Compose overrides
+- The game backend reads `platform/.env` for app config; Compose overrides
   `POSTGRES_URL`, `REDIS_URL`, `CORS_ORIGIN`, and the white-label wiring
-  (`WALLET_API_URL`, `OPERATOR_*`). Make sure `backend/platform/.env` exists.
+  (`WALLET_API_URL`, `OPERATOR_*`). Make sure `platform/.env` exists.
 - `OPERATOR_API_KEY` / `OPERATOR_SECRET` are the shared HMAC credentials between
   the platform and the white-label — they **must match** on both sides (Compose
   defaults them consistently).
@@ -126,7 +126,7 @@ the demo player at the end so it's rerunnable.
 Each service validates its env at startup and exits if any required var is missing. See each
 service's `.env.example` for the full list; the load-bearing ones:
 
-**White-label (`backend/white-label/`)** — money authority:
+**White-label (`white-label/`)** — money authority:
 
 | Variable | Description |
 |---|---|
@@ -137,7 +137,7 @@ service's `.env.example` for the full list; the load-bearing ones:
 | `LAUNCH_TOKEN_TTL_SECONDS` | Launch-token lifetime (default `60`) |
 | `INITIAL_DEMO_BALANCE` | Seed balance in **minor units** (`100000` = 1000 USD) |
 
-**Platform (`backend/platform/`)** — game backend:
+**Platform (`platform/`)** — game backend:
 
 | Variable | Description |
 |---|---|
@@ -153,15 +153,15 @@ service's `.env.example` for the full list; the load-bearing ones:
 
 ## Architecture
 
-### White-label (`backend/white-label/`)
+### White-label (`white-label/`)
 
 NestJS 11 + Prisma + Postgres. The **money and identity authority**: players, wallets (integer
 minor-unit `BigInt` balances), an append-only transaction ledger, and launch sessions. Exposes a
 server-to-server **seamless wallet** (`balance / debit / credit / rollback`, HMAC-guarded,
 idempotent on a game-generated `txRef`) and serves the **casino lobby** HTML (`/lobby`) that frames
-the game. See `backend/white-label/CLAUDE.md`.
+the game. See `white-label/CLAUDE.md`.
 
-### Platform (`backend/platform/`)
+### Platform (`platform/`)
 
 NestJS on Express with Postgres (Drizzle ORM, migrations applied on boot) and ioredis — the
 **game backend**, and a **thin client** of the white-label for money/identity. Modules: `auth`
@@ -170,7 +170,7 @@ NestJS on Express with Postgres (Drizzle ORM, migrations applied on boot) and io
 `SocketModule` hosts the Socket.IO gateway. Crash point `Math.max(1.01, 0.99 / Math.random())`;
 multiplier `e^(0.06 × t)`. Redis holds ephemeral live round state; Postgres stores rounds and
 bets (no wallet, no users — identity is the white-label's UUID).
-See `backend/platform/CLAUDE.md`.
+See `platform/CLAUDE.md`.
 
 ### Frontend (`frontend/crash-pilot/`)
 
@@ -183,10 +183,10 @@ state via `requestAnimationFrame`, and mirrors balance/session events to the lob
 
 | Location | Command | Purpose |
 |---|---|---|
-| `backend/white-label` | `npm run typecheck` | TypeScript check (no unit tests by design) |
-| `backend/white-label` | `npm run seed` | Re-seed demo players |
-| `backend/platform` | `npm test` | Jest unit tests |
-| `backend/platform` | `npm run typecheck` | TypeScript check |
+| `white-label` | `npm run typecheck` | TypeScript check (no unit tests by design) |
+| `white-label` | `npm run seed` | Re-seed demo players |
+| `platform` | `npm test` | Jest unit tests |
+| `platform` | `npm run typecheck` | TypeScript check |
 | `frontend/crash-pilot` | `npm test` | Vitest unit tests |
 | `frontend/crash-pilot` | `npm run typecheck` | TypeScript check |
 | _(repo root)_ | `node scripts/whitelabel-smoke.mjs` | End-to-end money-chain smoke (stack must be up) |

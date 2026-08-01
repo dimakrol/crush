@@ -27,10 +27,10 @@ docker compose up -d   # postgres + redis + white-label
 
 This is the **game backend** — round engine, bets, history, real-time socket. It is **no longer
 the money or identity authority**. Balance, transactions, and player identity live in
-`backend/white-label/`; this service is a **thin client** of the white-label's seamless-wallet
+`white-label/`; this service is a **thin client** of the white-label's seamless-wallet
 and launch-token APIs. Bets/rounds/history are backed by Postgres (see *Persistence*); the
 wallet and users collections are retired. This file is the design source of truth for the
-platform side; the operator side is `backend/white-label/CLAUDE.md`.
+platform side; the operator side is `white-label/CLAUDE.md`.
 
 ## Architecture
 
