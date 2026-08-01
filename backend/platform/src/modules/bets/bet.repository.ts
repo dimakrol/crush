@@ -3,6 +3,7 @@ import {
   and,
   desc,
   eq,
+  inArray,
   isNotNull,
   lt,
   lte,
@@ -11,12 +12,13 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
-import { getDrizzle } from '@/config/postgres';
+import { executor } from '@/config/postgres';
 import { bets } from '@/drizzle/schema';
 import {
   DuplicateKeyError,
   isPostgresUniqueViolation,
 } from '@/shared/errors/duplicate-key.error';
+import { TxContext } from '@/shared/repositories/unit-of-work';
 import { IBetRepository } from './bet.repository.interface';
 import { Bet, BetSlotId } from './bet.types';
 
@@ -38,7 +40,7 @@ const decodeCursor = (cursor: string): { placedAt: Date; id: string } => {
 @Injectable()
 export class BetRepository implements IBetRepository {
   async findById(id: string): Promise<Bet | null> {
-    const [row] = await getDrizzle()
+    const [row] = await executor()
       .select()
       .from(bets)
       .where(eq(bets.id, id))
@@ -46,9 +48,9 @@ export class BetRepository implements IBetRepository {
     return row ? this.toBet(row) : null;
   }
 
-  async create(data: Omit<Bet, 'id'>): Promise<Bet> {
+  async create(data: Omit<Bet, 'id'>, ctx?: TxContext): Promise<Bet> {
     try {
-      const [row] = await getDrizzle()
+      const [row] = await executor(ctx)
         .insert(bets)
         .values({
           userId: data.userId,
@@ -83,7 +85,7 @@ export class BetRepository implements IBetRepository {
     userId: string,
     slotId: BetSlotId,
   ): Promise<Bet | null> {
-    const [row] = await getDrizzle()
+    const [row] = await executor()
       .select()
       .from(bets)
       .where(
@@ -99,7 +101,7 @@ export class BetRepository implements IBetRepository {
   }
 
   async findActiveByUser(userId: string, roundId: string): Promise<Bet[]> {
-    const rows = await getDrizzle()
+    const rows = await executor()
       .select()
       .from(bets)
       .where(
@@ -138,7 +140,7 @@ export class BetRepository implements IBetRepository {
         )
       : userCond;
 
-    const rows = await getDrizzle()
+    const rows = await executor()
       .select()
       .from(bets)
       .where(where)
@@ -156,9 +158,10 @@ export class BetRepository implements IBetRepository {
     betId: string,
     multiplier: number,
     payout: number,
+    ctx?: TxContext,
   ): Promise<Bet | null> {
     const now = new Date();
-    const [row] = await getDrizzle()
+    const [row] = await executor(ctx)
       .update(bets)
       .set({
         status: 'CASHED_OUT',
@@ -181,9 +184,13 @@ export class BetRepository implements IBetRepository {
   // explicit `::double precision`: it makes the product IEEE-754 float64 in the
   // same left-to-right order as JS, so `floor` truncates at the same boundary.
   // Only the final division is numeric, so the stored value is an exact decimal.
-  async cashOutAuto(roundId: string, multiplier: number): Promise<Bet[]> {
+  async cashOutAuto(
+    roundId: string,
+    multiplier: number,
+    ctx?: TxContext,
+  ): Promise<Bet[]> {
     const now = new Date();
-    const rows = await getDrizzle()
+    const rows = await executor(ctx)
       .update(bets)
       .set({
         status: 'CASHED_OUT',
@@ -204,8 +211,12 @@ export class BetRepository implements IBetRepository {
     return rows.map((r) => this.toBet(r));
   }
 
-  async cancelPlaced(betId: string, userId: string): Promise<Bet | null> {
-    const [row] = await getDrizzle()
+  async cancelPlaced(
+    betId: string,
+    userId: string,
+    ctx?: TxContext,
+  ): Promise<Bet | null> {
+    const [row] = await executor(ctx)
       .update(bets)
       .set({ status: 'CANCELED', resolvedAt: new Date() })
       .where(
@@ -220,7 +231,7 @@ export class BetRepository implements IBetRepository {
   }
 
   async resolveLosses(roundId: string): Promise<Bet[]> {
-    const rows = await getDrizzle()
+    const rows = await executor()
       .update(bets)
       .set({ status: 'LOST', resolvedAt: new Date() })
       .where(and(eq(bets.roundId, roundId), eq(bets.status, 'PLACED')))
@@ -229,7 +240,7 @@ export class BetRepository implements IBetRepository {
   }
 
   async cancelByUser(userId: string, roundId: string): Promise<void> {
-    await getDrizzle()
+    await executor()
       .update(bets)
       .set({ status: 'CANCELED', resolvedAt: new Date() })
       .where(
@@ -241,26 +252,62 @@ export class BetRepository implements IBetRepository {
       );
   }
 
-  async findAllPlaced(): Promise<Bet[]> {
-    const rows = await getDrizzle()
+  async findAllUnsettled(): Promise<Bet[]> {
+    const rows = await executor()
       .select()
       .from(bets)
-      .where(eq(bets.status, 'PLACED'));
+      .where(inArray(bets.status, ['PLACED', 'PENDING_STAKE']));
     return rows.map((r) => this.toBet(r));
   }
 
-  async markCanceled(betId: string): Promise<void> {
-    await getDrizzle()
+  // The stake handshake's three exits, each a guarded compare-and-set from
+  // PENDING_STAKE so a late duplicate (or the outbox worker racing an inline
+  // caller) can only ever lose, never overwrite a decided bet.
+  async markPlaced(betId: string, ctx?: TxContext): Promise<Bet | null> {
+    const [row] = await executor(ctx)
+      .update(bets)
+      .set({ status: 'PLACED' })
+      .where(and(eq(bets.id, betId), eq(bets.status, 'PENDING_STAKE')))
+      .returning();
+    return row ? this.toBet(row) : null;
+  }
+
+  async markRejected(betId: string, ctx?: TxContext): Promise<void> {
+    await executor(ctx)
+      .update(bets)
+      .set({ status: 'REJECTED', resolvedAt: new Date() })
+      .where(and(eq(bets.id, betId), eq(bets.status, 'PENDING_STAKE')));
+  }
+
+  async markStakeCanceled(betId: string, ctx?: TxContext): Promise<void> {
+    await executor(ctx)
+      .update(bets)
+      .set({ status: 'CANCELED', resolvedAt: new Date() })
+      .where(and(eq(bets.id, betId), eq(bets.status, 'PENDING_STAKE')));
+  }
+
+  async markCanceled(betId: string, ctx?: TxContext): Promise<void> {
+    await executor(ctx)
       .update(bets)
       .set({ status: 'CANCELED', resolvedAt: new Date() })
       .where(and(eq(bets.id, betId), eq(bets.status, 'PLACED')));
   }
 
-  async markSettlementPending(betId: string): Promise<void> {
-    await getDrizzle()
+  async markSettlementPending(betId: string, ctx?: TxContext): Promise<void> {
+    await executor(ctx)
       .update(bets)
       .set({ status: 'SETTLEMENT_PENDING' })
-      .where(eq(bets.id, betId));
+      .where(and(eq(bets.id, betId), eq(bets.status, 'CASHED_OUT')));
+  }
+
+  // The inverse: a win the worker eventually delivered is a plain CASHED_OUT bet
+  // again. Without this the flag would be a one-way door and history would keep
+  // showing a settled win as unpaid.
+  async restoreCashedOut(betId: string, ctx?: TxContext): Promise<void> {
+    await executor(ctx)
+      .update(bets)
+      .set({ status: 'CASHED_OUT' })
+      .where(and(eq(bets.id, betId), eq(bets.status, 'SETTLEMENT_PENDING')));
   }
 
   private toBet(row: BetRow): Bet {

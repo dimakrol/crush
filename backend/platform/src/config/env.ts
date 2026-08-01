@@ -33,6 +33,11 @@ const envSchema = z.object({
   OPERATOR_API_KEY: z.string().min(1).default('dev-operator-key'),
   OPERATOR_SECRET: z.string().min(1).default('dev-operator-secret-change-me'),
   GAME_ID: z.string().default('crash-pilot'),
+
+  // Shared key for the operator-facing admin endpoints (currently the wallet
+  // outbox retry). No default on purpose: an admin surface behind a guessable
+  // key is worse than one that refuses to boot.
+  ADMIN_API_KEY: z.string().min(1),
 });
 
 const result = envSchema.safeParse(process.env);

@@ -3,6 +3,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { GlobalExceptionFilter } from './shared/errors/error.filter';
 import { AuthModule } from './modules/auth/auth.module';
 import { WalletModule } from './modules/wallet/wallet.module';
+import { WalletOpsModule } from './modules/wallet-ops/wallet-ops.module';
 import { RoundsModule } from './modules/rounds/rounds.module';
 import { BetsModule } from './modules/bets/bets.module';
 import { HistoryModule } from './modules/history/history.module';
@@ -13,6 +14,7 @@ import { GameModule } from './game/game.module';
   imports: [
     AuthModule,
     WalletModule,
+    WalletOpsModule,
     RoundsModule,
     BetsModule,
     HistoryModule,

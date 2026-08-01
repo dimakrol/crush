@@ -83,6 +83,8 @@ services:
       OPERATOR_API_KEY: ${OPERATOR_API_KEY:-dev-operator-key}
       OPERATOR_SECRET: ${OPERATOR_SECRET:-dev-operator-secret-change-me}
       GAME_ID: crash-pilot
+      # Guards POST /api/admin/wallet-ops/retry (the money-outbox recovery hook).
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: 500
       WATCHPACK_POLLING: "true"

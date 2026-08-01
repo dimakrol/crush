@@ -15,6 +15,13 @@
       "when": 1785335501543,
       "tag": "0001_eminent_blink",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785338997898,
+      "tag": "0002_large_maximus",
+      "breakpoints": true
     }
   ]
 }

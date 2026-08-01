@@ -1,8 +1,14 @@
 import { Pool } from 'pg';
-import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
+import {
+  drizzle,
+  NodePgDatabase,
+  NodePgQueryResultHKT,
+} from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { PgDatabase } from 'drizzle-orm/pg-core';
 import { resolve } from 'path';
 import { env } from './env';
+import { TxContext } from '@/shared/repositories/unit-of-work';
 import * as schema from '../drizzle/schema';
 
 // The single long-lived store. A module-level singleton connected imperatively
@@ -67,6 +73,29 @@ export async function migratePostgres(): Promise<void> {
 export function getDrizzle(): Drizzle {
   if (!db) throw new Error('Postgres not connected — call connectPostgres() first');
   return db;
+}
+
+// Anything a repository can run a statement against: the pool-backed database or
+// an open transaction. Both derive from the same PgDatabase base, so a
+// repository method never has to care which one it got.
+export type Executor = PgDatabase<NodePgQueryResultHKT, typeof schema>;
+
+// Open a transaction and hand it to `work` as an opaque TxContext. This is the
+// only place in the project that starts an explicit transaction: it exists so a
+// bet-state change and the wallet_ops row that justifies it commit together —
+// there must never be a money move nothing remembers, nor a remembered move
+// whose bet never changed.
+export function runInTransaction<T>(
+  work: (ctx: TxContext) => Promise<T>,
+): Promise<T> {
+  return getDrizzle().transaction((tx) => work({ _executor: tx }));
+}
+
+// Unwrap a TxContext, defaulting to the pool when the caller isn't in one.
+// Repositories call this instead of getDrizzle() so every write can be enlisted
+// in a transaction without duplicating the method.
+export function executor(ctx?: TxContext): Executor {
+  return ctx ? (ctx._executor as Executor) : getDrizzle();
 }
 
 export async function closePostgres(): Promise<void> {

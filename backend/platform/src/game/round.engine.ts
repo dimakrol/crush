@@ -84,11 +84,11 @@ export class RoundEngine implements OnModuleInit {
     logger.info('Round RUNNING', { roundId: round.id, crashPoint: round.crashPoint })
     this.gateway.emitToAll('round:started', { roundId: round.id, phase: 'RUNNING', startedAt })
 
-    // Auto-cashouts are detected and marked inside the tick (a local DB write),
-    // but their wallet credits are deferred: the 100ms tick must never block on
-    // a network call to the operator. Each marked cashout is collected here and
-    // credited after the interval is cleared.
-    const pendingCredits: { bet: Bet; payout: number }[] = []
+    // Auto-cashouts are detected, marked and recorded in the outbox inside the
+    // tick (local DB writes), but their wallet credits are deferred: the 100ms
+    // tick must never block on a network call to the operator. Each marked
+    // cashout is collected here and credited after the interval is cleared.
+    const pendingCredits: Bet[] = []
 
     await new Promise<void>((resolve) => {
       const start = Date.now()
@@ -102,10 +102,10 @@ export class RoundEngine implements OnModuleInit {
         })
 
         const marked = await this.betService.markAutoCashouts(round.id, multiplier)
-        for (const entry of marked) {
-          pendingCredits.push(entry)
+        for (const bet of marked) {
+          pendingCredits.push(bet)
           // Tell the player they cashed out now; the balance follows once credited.
-          this.gateway.emitToUser(entry.bet.userId, 'bet:cashedOut', { bet: entry.bet })
+          this.gateway.emitToUser(bet.userId, 'bet:cashedOut', { bet })
         }
 
         if (multiplier >= round.crashPoint) {
@@ -116,9 +116,11 @@ export class RoundEngine implements OnModuleInit {
     })
 
     // Drain credits AFTER the tick loop has stopped — never inside the tick.
-    for (const { bet, payout } of pendingCredits) {
+    // Each credit is already recorded in the outbox, so a failure here only
+    // delays the money: the WalletOutboxWorker picks it up.
+    for (const bet of pendingCredits) {
       try {
-        const balance = await this.betService.creditWin(bet, payout)
+        const balance = await this.betService.creditWin(bet)
         this.gateway.emitToUser(bet.userId, 'wallet:updated', { balance })
       } catch (err) {
         logger.error('Auto-cashout credit failed', { betId: bet.id, error: (err as Error).message })

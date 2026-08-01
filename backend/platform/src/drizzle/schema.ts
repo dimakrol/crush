@@ -3,6 +3,7 @@ import {
   check,
   doublePrecision,
   index,
+  integer,
   numeric,
   pgEnum,
   pgTable,
@@ -112,6 +113,81 @@ export const bets = pgTable(
     check(
       'bets_auto_cash_out_gt_one',
       sql`"auto_cash_out" IS NULL OR "auto_cash_out" > 1`,
+    ),
+  ],
+);
+
+// Direction of a money move, mirroring the white-label's Transaction.type.
+export const walletOpKind = pgEnum('wallet_op_kind', [
+  'DEBIT',
+  'CREDIT',
+  'ROLLBACK',
+]);
+
+// PENDING   — intent recorded, the operator has not confirmed it.
+// CONFIRMED — the operator acknowledged the move (or replayed it idempotently).
+// FAILED    — terminal: refused deterministically, or the retry budget ran out.
+export const walletOpState = pgEnum('wallet_op_state', [
+  'PENDING',
+  'CONFIRMED',
+  'FAILED',
+]);
+
+// Transactional outbox for every money move delegated to the white-label. The
+// row is written in the SAME transaction as the bet-state change that justifies
+// it and BEFORE the network call, so a crash or an operator outage can never
+// leave a money move that nothing remembers.
+//
+// Amounts are the platform's DOMAIN decimals (like bets.amount); the
+// minor-unit conversion stays at the HttpWalletRepository seam.
+export const walletOps = pgTable(
+  'wallet_ops',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: walletOpKind('kind').notNull(),
+    state: walletOpState('state').notNull().default('PENDING'),
+    // The idempotency key the white-label dedupes on. UNIQUE here is not
+    // decoration: it makes enqueueing itself idempotent, so two callers that
+    // both decide to reverse the same debit (cancelBet and recoverOpenBets, say)
+    // physically cannot create two reversals.
+    txRef: text('tx_ref').notNull().unique(),
+    // Set for ROLLBACK only: the txRef of the debit being reversed.
+    refTxRef: text('ref_tx_ref'),
+    betId: uuid('bet_id').references(() => bets.id),
+    playerId: text('player_id').notNull(),
+    currency: text('currency').notNull(),
+    amount: numeric('amount', { precision: 20, scale: 4 }).notNull(),
+    roundId: uuid('round_id'),
+    slotId: smallint('slot_id'),
+    attempts: integer('attempts').notNull().default(0),
+    // When the worker may claim this row. Also acts as a lease: claiming pushes
+    // it into the future, so a process that dies mid-call releases the op after
+    // the lease instead of stranding it.
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // The worker's only query. Partial: CONFIRMED rows are the overwhelming
+    // majority and never need to be scanned.
+    index('wallet_ops_pending_idx')
+      .on(t.state, t.nextAttemptAt)
+      .where(sql`"state" = 'PENDING'`),
+    index('wallet_ops_bet_idx').on(t.betId),
+    check('wallet_ops_amount_non_negative', sql`"amount" >= 0`),
+    check('wallet_ops_attempts_non_negative', sql`"attempts" >= 0`),
+    // A reversal without the debit it reverses is unreplayable; a plain move
+    // with a ref would reverse something by accident.
+    check(
+      'wallet_ops_rollback_has_ref',
+      sql`("kind" = 'ROLLBACK') = ("ref_tx_ref" IS NOT NULL)`,
     ),
   ],
 );
