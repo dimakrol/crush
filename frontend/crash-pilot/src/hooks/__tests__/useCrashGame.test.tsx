@@ -104,6 +104,30 @@ describe('useCrashGame socket reducer', () => {
     expect(result.current.currentMultiplier).toBeCloseTo(3.5)
   })
 
+  it('raises and clears the operator pause', () => {
+    const { result } = renderHook(() => useCrashGame(), { wrapper })
+    expect(result.current.paused).toBe(false)
+
+    emit('round:paused', { paused: true })
+    expect(result.current.paused).toBe(true)
+    // The pause is orthogonal to the phase: the crashed round stays on screen.
+    expect(result.current.phase).toBe('WAITING')
+
+    emit('round:resumed', { paused: false })
+    expect(result.current.paused).toBe(false)
+  })
+
+  it('clears a stale pause when a round starts anyway', () => {
+    // A socket that connects between the resume and the gateway's late-join
+    // check gets round:paused with no round:resumed to follow. Without this the
+    // overlay would sit over a visibly running game.
+    const { result } = renderHook(() => useCrashGame(), { wrapper })
+    emit('round:paused', { paused: true })
+    emit('round:multiplier', { roundId: 'r7', multiplier: 2.2 })
+    expect(result.current.paused).toBe(false)
+    expect(result.current.phase).toBe('RUNNING')
+  })
+
   it('keeps balance null and slots empty for a guest', async () => {
     const { result } = renderHook(() => useCrashGame(), { wrapper })
     await waitFor(() => expect(result.current.balance).toBeNull())

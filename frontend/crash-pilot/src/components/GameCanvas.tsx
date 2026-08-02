@@ -5,6 +5,7 @@ import { useThrottledValue } from '../hooks/useThrottledValue'
 
 interface GameCanvasProps {
   phase: GamePhase
+  paused: boolean
   countdown: number
   currentMultiplier: number
   crashPoint: number | null
@@ -39,7 +40,7 @@ function generateDebris(): DebrisParticle[] {
   })
 }
 
-export function GameCanvas({ phase, countdown, currentMultiplier, crashPoint }: GameCanvasProps) {
+export function GameCanvas({ phase, paused, countdown, currentMultiplier, crashPoint }: GameCanvasProps) {
   const isCrashed = phase === 'CRASHED'
   const isRunning = phase === 'RUNNING'
 
@@ -213,7 +214,11 @@ export function GameCanvas({ phase, countdown, currentMultiplier, crashPoint }: 
         </div>
 
         <div className="mt-3 text-lg text-gray-300 font-medium">
-          {phase === 'WAITING' && (
+          {/* Suppressed while paused: a page loaded during a pause starts at
+              WAITING with countdown 0, and "Next round in 0s" that never
+              advances is exactly the frozen screen the overlay exists to
+              explain. */}
+          {phase === 'WAITING' && !paused && (
             <span>
               Next round in <span className="text-yellow-400 font-bold">{countdown}s</span>
             </span>
@@ -232,6 +237,24 @@ export function GameCanvas({ phase, countdown, currentMultiplier, crashPoint }: 
           className="absolute inset-0 rounded-2xl animate-crash-flash pointer-events-none"
           aria-hidden="true"
         />
+      )}
+
+      {/* Operator pause. Last in the stack so it sits above the multiplier and
+          the crash visuals, and translucent so the round that just ended stays
+          readable underneath — the player's own result is the first thing they
+          look for when the screen stops moving. */}
+      {paused && (
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-gray-900/75 px-4 text-center backdrop-blur-[2px]"
+          role="status"
+        >
+          <div>
+            <p className="text-2xl md:text-3xl font-black text-yellow-400">Rounds paused</p>
+            <p className="mt-1 text-sm text-gray-300">
+              The game is on hold. Rounds will resume shortly.
+            </p>
+          </div>
+        </div>
       )}
     </div>
   )

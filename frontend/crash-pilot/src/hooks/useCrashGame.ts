@@ -37,6 +37,9 @@ const EMPTY_SLOTS: Slots = {
 export interface UseCrashGameReturn {
   connected: boolean
   phase: GamePhase
+  // The operator stopped the loop between rounds. Orthogonal to `phase`, which
+  // keeps describing the last round that played out.
+  paused: boolean
   countdown: number
   currentMultiplier: number
   currentRoundId: string | null
@@ -59,6 +62,7 @@ export function useCrashGame(): UseCrashGameReturn {
 
   const [connected, setConnected] = useState(() => getSocket().connected)
   const [phase, setPhase] = useState<GamePhase>('WAITING')
+  const [paused, setPaused] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [currentMultiplier, setCurrentMultiplier] = useState(1)
   const [currentRoundId, setCurrentRoundId] = useState<string | null>(null)
@@ -111,6 +115,12 @@ export function useCrashGame(): UseCrashGameReturn {
         stopRaf()
         phaseRef.current = 'WAITING'
         setPhase('WAITING')
+        // A round starting is proof the engine is not paused. Needed because a
+        // socket can connect in the instant between the operator resuming and
+        // the gateway's late-join check, receive `round:paused` and never see
+        // the `round:resumed` that was broadcast just before it arrived —
+        // leaving the overlay up over a game that is visibly running.
+        setPaused(false)
         setCurrentRoundId(e.roundId)
         setCountdown(e.countdown)
         setCurrentMultiplier(1)
@@ -121,6 +131,7 @@ export function useCrashGame(): UseCrashGameReturn {
       onSocket('round:started', (e) => {
         phaseRef.current = 'RUNNING'
         setPhase('RUNNING')
+        setPaused(false)
         setCurrentRoundId(e.roundId)
         setCrashPoint(null)
         anchorRef.current = { multiplier: 1, at: performance.now() }
@@ -134,6 +145,7 @@ export function useCrashGame(): UseCrashGameReturn {
         if (phaseRef.current !== 'RUNNING') {
           phaseRef.current = 'RUNNING'
           setPhase('RUNNING')
+          setPaused(false) // same stale-pause guard as round:waiting
           setCrashPoint(null)
           runRaf()
         }
@@ -152,6 +164,12 @@ export function useCrashGame(): UseCrashGameReturn {
           ].slice(0, HISTORY_LIMIT),
         )
       }),
+      // The pause is announced, not inferred: without it the client cannot tell
+      // "the operator stopped the loop" from "the connection died quietly", and
+      // both look like a frozen screen. Nothing else is reset — the last crash
+      // stays on screen underneath the overlay.
+      onSocket('round:paused', () => setPaused(true)),
+      onSocket('round:resumed', () => setPaused(false)),
     ]
     return () => offs.forEach((off) => off())
   }, [runRaf, stopRaf])
@@ -323,6 +341,7 @@ export function useCrashGame(): UseCrashGameReturn {
   return {
     connected,
     phase,
+    paused,
     countdown,
     currentMultiplier,
     currentRoundId,

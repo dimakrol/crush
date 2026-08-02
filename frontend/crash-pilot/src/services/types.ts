@@ -75,6 +75,16 @@ export interface RoundCrashedEvent {
   crashPoint: number
   crashedAt: string
 }
+// Operator pause. Broadcast once when the engine enters the pause, and sent to a
+// single socket that connects while a pause is already standing. Deliberately
+// NOT a GamePhase: the pause sits *between* rounds, and folding it into the
+// phase machine would make every phase check in the app a three-way one.
+export interface RoundPausedEvent {
+  paused: true
+}
+export interface RoundResumedEvent {
+  paused: false
+}
 export interface BetCashedOutEvent {
   bet: Bet
 }

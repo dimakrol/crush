@@ -6,6 +6,7 @@ import { formatCredits, formatMultiplier } from '../utils/format'
 interface BettingPanelProps {
   slotId: BetSlotId
   phase: GamePhase
+  paused: boolean
   currentMultiplier: number
   slot: SlotState
   authed: boolean
@@ -23,6 +24,7 @@ const MIN_AUTO_CASHOUT = 1.1
 export function BettingPanel({
   slotId,
   phase,
+  paused,
   currentMultiplier,
   slot,
   authed,
@@ -50,8 +52,10 @@ export function BettingPanel({
   const isMidRound = phase === 'RUNNING' || phase === 'CRASHED'
   const hasActiveBet = bet?.status === 'PLACED'
   const canUseInputs = !bet || (isMidRound && !hasActiveBet)
-  const canPlace = authed && isWaiting && !bet && isValidAmount && !autoCashOutError && !pending
-  const canQueue = authed && isMidRound && canUseInputs && !queued && isValidAmount && !autoCashOutError && !pending
+  // Both new-money actions die while the engine is paused. Cashing out and
+  // cancelling stay available: they only ever unwind something already staked.
+  const canPlace = authed && !paused && isWaiting && !bet && isValidAmount && !autoCashOutError && !pending
+  const canQueue = authed && !paused && isMidRound && canUseInputs && !queued && isValidAmount && !autoCashOutError && !pending
   const canCashOut = phase === 'RUNNING' && hasActiveBet
   const canCancelBet = phase === 'WAITING' && hasActiveBet
   const inputsDisabled = !authed || !canUseInputs || !!queued || pending !== null
@@ -153,6 +157,21 @@ export function BettingPanel({
         >
           Launch from the casino lobby to play
         </button>
+      ) : paused ? (
+        // Queueing while paused would be harmless in money terms — the stake is
+        // debited only when runWaiting() actually places the bet — but naming a
+        // "next round" that nobody has scheduled is a promise the UI can't keep.
+        // Placed above the isWaiting branch, below the cancel branches: a bet or
+        // queue that already exists can still be taken back.
+        <div className="space-y-1">
+          <button
+            disabled
+            className="w-full py-3 text-sm font-semibold rounded-xl bg-gray-700 text-gray-400 cursor-not-allowed"
+          >
+            Betting paused
+          </button>
+          <p className="text-center text-xs text-gray-500">New bets open when rounds resume.</p>
+        </div>
       ) : isWaiting ? (
         <button
           onClick={handlePlace}

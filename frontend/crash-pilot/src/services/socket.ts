@@ -15,6 +15,8 @@ import type {
   RoundStartedEvent,
   RoundMultiplierEvent,
   RoundCrashedEvent,
+  RoundPausedEvent,
+  RoundResumedEvent,
   BetCashedOutEvent,
   BetCanceledEvent,
   BetLostEvent,
@@ -36,6 +38,8 @@ export interface ServerEvents {
   'round:started': RoundStartedEvent
   'round:multiplier': RoundMultiplierEvent
   'round:crashed': RoundCrashedEvent
+  'round:paused': RoundPausedEvent
+  'round:resumed': RoundResumedEvent
   'bet:placed': BetCashedOutEvent // { result } shape from socket bet:place; bet field present
   'bet:cashedOut': BetCashedOutEvent
   'bet:canceled': BetCanceledEvent

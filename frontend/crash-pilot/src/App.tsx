@@ -17,6 +17,7 @@ export default function App() {
   const {
     connected,
     phase,
+    paused,
     countdown,
     currentMultiplier,
     crashPoint,
@@ -85,6 +86,7 @@ export default function App() {
       <main className="flex-1 flex flex-col max-w-2xl mx-auto w-full px-4 py-6 gap-4">
         <GameCanvas
           phase={phase}
+          paused={paused}
           countdown={countdown}
           currentMultiplier={currentMultiplier}
           crashPoint={crashPoint}
@@ -110,6 +112,7 @@ export default function App() {
               key={slotId}
               slotId={slotId}
               phase={phase}
+              paused={paused}
               currentMultiplier={panelMultiplier}
               slot={slots[slotId]}
               authed={authed}
