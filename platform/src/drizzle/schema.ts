@@ -57,6 +57,12 @@ export const rounds = pgTable(
     crashPoint: doublePrecision('crash_point').notNull(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     crashedAt: timestamp('crashed_at', { withTimezone: true }),
+    // Set only when an operator crashed the round by hand instead of letting it
+    // reach its generated crash point. The fact belongs here — a round whose
+    // crash_point was rewritten mid-flight must be distinguishable from a fair
+    // one forever, including in exports that never see the backoffice. WHO did
+    // it is deliberately not stored: that is the backoffice's audit log.
+    forcedAt: timestamp('forced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (t) => [

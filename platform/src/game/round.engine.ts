@@ -9,9 +9,22 @@ import { BetService } from '@/modules/bets/bet.service'
 import { Bet } from '@/modules/bets/bet.types'
 import { GameGateway } from '@/socket/game.gateway'
 
+// Operator pause. Kept in Redis rather than in memory so it survives a restart:
+// a deploy in the middle of a paused night must not quietly resume the game.
+const PAUSED_KEY = 'game:enginePaused'
+
+// How often a paused loop re-reads the flag. Coarse on purpose — resuming half a
+// second late costs nothing, and this poll runs forever while paused.
+const PAUSE_POLL_MS = 1000
+
 @Injectable()
 export class RoundEngine implements OnModuleInit {
   private loopActive = false
+
+  // Raised by the admin controller, consumed by the running tick. A plain field,
+  // not Redis: unlike the pause, a force-crash only makes sense for the round
+  // this very process is running, and must not survive a restart.
+  private forceCrashRequested = false
 
   constructor(
     @Inject(ROUND_REPOSITORY) private readonly roundRepo: IRoundRepository,
@@ -35,10 +48,53 @@ export class RoundEngine implements OnModuleInit {
 
   private async runCycle(): Promise<void> {
     while (this.loopActive) {
+      // Before the round is created, never inside one: the pause is graceful by
+      // definition — whatever is in flight plays out and settles, only the next
+      // round is withheld.
+      await this.awaitResumeIfPaused()
       const round = await this.runWaiting()
       await this.runRunning(round)
       await this.runCrashed(round)
     }
+  }
+
+  // Blocks the cycle while the flag is set. The loop stays alive and `loopActive`
+  // untouched, so resuming is a Redis key away and never needs a restart.
+  private async awaitResumeIfPaused(): Promise<void> {
+    const redis = getRedis()
+    if ((await redis.get(PAUSED_KEY)) !== '1') return
+
+    logger.warn('Engine paused — no new rounds will start')
+    // Announced once, on entering the pause. Clients that connect later are told
+    // by GameGateway.handleConnection instead: without that, a page opened
+    // during a pause would sit through silence with no idea why.
+    this.gateway.emitToAll('round:paused', { paused: true })
+
+    while (this.loopActive && (await redis.get(PAUSED_KEY)) === '1') {
+      await sleep(PAUSE_POLL_MS)
+    }
+
+    logger.info('Engine resumed')
+    this.gateway.emitToAll('round:resumed', { paused: false })
+  }
+
+  // Set/clear the pause. Idempotent: the value carries the intent, so a repeated
+  // call from a nervous operator changes nothing.
+  async setPaused(paused: boolean): Promise<void> {
+    const redis = getRedis()
+    if (paused) await redis.set(PAUSED_KEY, '1')
+    else await redis.del(PAUSED_KEY)
+  }
+
+  async isPaused(): Promise<boolean> {
+    return (await getRedis().get(PAUSED_KEY)) === '1'
+  }
+
+  // Ends the current round at whatever multiplier the next tick observes. The
+  // request is only honoured by a tick loop that is already running; see
+  // runRunning for why a stale request cannot leak into the following round.
+  requestForceCrash(): void {
+    this.forceCrashRequested = true
   }
 
   private async runWaiting(): Promise<Round> {
@@ -75,6 +131,12 @@ export class RoundEngine implements OnModuleInit {
   }
 
   private async runRunning(round: Round): Promise<void> {
+    // Clear anything raised while no round was running. The controller rejects
+    // such requests with a 409, but the phase it checks lives in Redis and can
+    // be a few milliseconds stale — this makes it impossible for that race to
+    // insta-crash the *next* round at 1.01.
+    this.forceCrashRequested = false
+
     const startedAt = new Date()
     await this.roundRepo.updatePhase(round.id, 'RUNNING', { startedAt })
 
@@ -108,12 +170,25 @@ export class RoundEngine implements OnModuleInit {
           this.gateway.emitToUser(bet.userId, 'bet:cashedOut', { bet })
         }
 
+        // Checked after markAutoCashouts, so everyone whose auto-cashout the
+        // round had already reached is paid: below the forced point they win,
+        // above it they lose, exactly as in a natural crash.
+        if (this.forceCrashRequested) {
+          await this.applyForceCrash(round, multiplier)
+          clearInterval(tick)
+          resolve()
+          return
+        }
+
         if (multiplier >= round.crashPoint) {
           clearInterval(tick)
           resolve()
         }
       }, 100)
     })
+
+    // Whether it fired or not, the request dies with the round it was aimed at.
+    this.forceCrashRequested = false
 
     // Drain credits AFTER the tick loop has stopped — never inside the tick.
     // Each credit is already recorded in the outbox, so a failure here only
@@ -126,6 +201,26 @@ export class RoundEngine implements OnModuleInit {
         logger.error('Auto-cashout credit failed', { betId: bet.id, error: (err as Error).message })
       }
     }
+  }
+
+  // Rewrite the round's crash point to the multiplier the tick just observed and
+  // stamp it as manual. Two details are load-bearing:
+  //
+  //  - the clamp: crash_point carries a CHECK >= 1.01, so a force-crash in the
+  //    first ~0.16s would otherwise be refused by the database and leave the
+  //    round running with nothing to show for the operator's click;
+  //  - the assignment to `round.crashPoint`: runCrashed broadcasts and logs the
+  //    in-memory object, so without it every client would be told the round
+  //    ended at its original, never-reached crash point.
+  //
+  // The exact multiplier is stored, not the two-decimal one that was broadcast:
+  // it is the same value markAutoCashouts was just judged against, and history
+  // must agree with what was paid.
+  private async applyForceCrash(round: Round, multiplier: number): Promise<void> {
+    const crashPoint = Math.max(1.01, multiplier)
+    await this.roundRepo.updatePhase(round.id, 'RUNNING', { crashPoint, forcedAt: new Date() })
+    round.crashPoint = crashPoint
+    logger.warn('Round force-crashed by operator', { roundId: round.id, crashPoint })
   }
 
   private async runCrashed(round: Round): Promise<void> {

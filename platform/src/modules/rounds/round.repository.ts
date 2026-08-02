@@ -68,6 +68,7 @@ export class RoundRepository implements IRoundRepository {
       crashPoint: row.crashPoint,
       startedAt: row.startedAt,
       crashedAt: row.crashedAt,
+      forcedAt: row.forcedAt,
       createdAt: row.createdAt,
     };
   }

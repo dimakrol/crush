@@ -22,6 +22,13 @@
       "when": 1785338997898,
       "tag": "0002_large_maximus",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785676087668,
+      "tag": "0003_clammy_thunderbolt_ross",
+      "breakpoints": true
     }
   ]
 }

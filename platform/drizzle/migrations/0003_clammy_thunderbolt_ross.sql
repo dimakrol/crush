@@ -1,0 +1,1 @@
+ALTER TABLE "rounds" ADD COLUMN "forced_at" timestamp with time zone;

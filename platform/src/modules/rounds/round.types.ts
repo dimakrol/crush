@@ -6,5 +6,7 @@ export interface Round {
   crashPoint: number;
   startedAt: Date | null;
   crashedAt: Date | null;
+  // Non-null when an operator ended the round by hand; see drizzle/schema.ts.
+  forcedAt: Date | null;
   createdAt: Date;
 }

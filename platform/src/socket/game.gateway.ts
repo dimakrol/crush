@@ -11,6 +11,7 @@ import { Server, Socket } from 'socket.io'
 import jwt from 'jsonwebtoken'
 import { forwardRef, Inject } from '@nestjs/common'
 import { env } from '@/config/env'
+import { getRedis } from '@/config/redis'
 import { AppError } from '@/shared/errors/AppError'
 import { ErrorCode } from '@/shared/errors/error-codes'
 import { BetService } from '@/modules/bets/bet.service'
@@ -41,6 +42,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const token = socket.handshake.auth?.token as string | undefined
     if (token) await this.authenticateSocket(socket, token)
     else logger.info('Guest socket connected', { socketId: socket.id })
+
+    // RoundEngine broadcasts 'round:paused' once, when it enters the pause.
+    // A client that connects afterwards missed it and would otherwise wait
+    // through an empty screen with no round events ever arriving — so tell this
+    // socket alone. Redis is read directly, as the engine does: SocketModule is
+    // already tied to GameModule through a forwardRef, and injecting the engine
+    // back into the gateway would tighten that knot for no gain.
+    if ((await getRedis().get('game:enginePaused')) === '1') {
+      socket.emit('round:paused', { paused: true })
+    }
   }
 
   async handleDisconnect(socket: AuthSocket): Promise<void> {
