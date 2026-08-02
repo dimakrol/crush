@@ -4,7 +4,7 @@ import {
   ArgumentsHost,
   HttpException,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { AppError } from './AppError';
 import { ErrorCode } from './error-codes';
 
@@ -13,6 +13,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const res = ctx.getResponse<Response>();
+    // Every failure funnels through here, which makes it the only place that
+    // can tell AuditGuard's response listener why a request failed — the
+    // exception is gone by the time the listener runs.
+    ctx.getRequest<Request>().auditError =
+      exception instanceof Error ? exception.message : String(exception);
 
     if (exception instanceof AppError) {
       res.status(exception.statusCode).json({
