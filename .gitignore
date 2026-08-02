@@ -76,6 +76,8 @@ Thumbs.db
 prisma/migrations
 *.db
 *.db-journal
+*.sqlite
+*.sqlite3
 service-account.json
 
 /plans

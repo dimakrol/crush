@@ -1,0 +1,9 @@
+node_modules
+dist
+client/dist
+coverage
+.env
+
+# The backoffice's own SQLite database (users + audit_log). Never committed:
+# it holds password hashes and is environment-local by definition.
+data/

@@ -104,6 +104,58 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  backoffice:
+    build:
+      context: ./backoffice
+    # NestJS + the Vite/react-admin client run in one process tree; only Nest's
+    # port is published, the Vite dev server is reached through Nest's proxy.
+    #
+    # backoffice/.env is bind-mounted with the source, but process.loadEnvFile()
+    # never overwrites an already-set variable — everything below wins over it.
+    environment:
+      PORT: 4000
+      # Superuser credentials, used at boot only: they create the read-only role
+      # the runtime pool then logs in as, so this service physically cannot write
+      # to the game's data. Same database the platform owns.
+      POSTGRES_ADMIN_URL: postgresql://whitelabel:whitelabel@postgres:5432/crash_pilot
+      POSTGRES_RO_USER: backoffice_ro
+      POSTGRES_RO_PASSWORD: ${BACKOFFICE_RO_PASSWORD:-backoffice_ro_dev}
+      # The backoffice's own store (operator accounts + audit log). Inside the
+      # bind-mounted tree, so it survives rebuilds — host path ./backoffice/data.
+      SQLITE_PATH: /app/data/backoffice.db
+      BACKOFFICE_JWT_SECRET: ${BACKOFFICE_JWT_SECRET:-dev-backoffice-secret-change-me}
+      BACKOFFICE_JWT_EXPIRES_IN: 8h
+      BACKOFFICE_ADMIN_USER: ${BACKOFFICE_ADMIN_USER:-admin}
+      BACKOFFICE_ADMIN_PASSWORD: ${BACKOFFICE_ADMIN_PASSWORD:-admin}
+      # Reads hit Postgres directly, but every write goes through the platform's
+      # admin API — that is what keeps the money outbox the only path a balance
+      # can move along. ADMIN_API_KEY must match the backend's value above.
+      PLATFORM_API_URL: http://backend:4000
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
+      # Vite runs in this same container, so localhost is the right address here.
+      VITE_DEV_SERVER_URL: http://localhost:5175
+      STUCK_OP_MINUTES: 5
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: 500
+      WATCHPACK_POLLING: "true"
+      TSC_WATCHFILE: PriorityPollingInterval
+      TSC_WATCHDIRECTORY: FixedPollingInterval
+    ports:
+      - "${BACKOFFICE_PORT:-4300}:4000"
+    volumes:
+      - ./backoffice:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # `service_started` is all Compose can offer, but the boot-time schema
+      # guard needs the platform's migrations to have already run against
+      # crash_pilot. On a cold first start it can lose that race and exit —
+      # restart: unless-stopped is what makes the stack converge anyway.
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend/crash-pilot
