@@ -30,7 +30,8 @@ the money or identity authority**. Balance, transactions, and player identity li
 `white-label/`; this service is a **thin client** of the white-label's seamless-wallet
 and launch-token APIs. Bets/rounds/history are backed by Postgres (see *Persistence*); the
 wallet and users collections are retired. This file is the design source of truth for the
-platform side; the operator side is `white-label/CLAUDE.md`.
+platform side; the operator side is `white-label/CLAUDE.md`, and the staff-facing console that
+drives `/api/admin/*` is `backoffice/CLAUDE.md`.
 
 ## Architecture
 
@@ -62,7 +63,7 @@ serializing the body once so the signed bytes equal the sent bytes. `HttpWalletR
 back. `OPERATOR_API_KEY`/`OPERATOR_SECRET` **must match the white-label's**.
 
 **Cross-cutting:**
-- `src/game/` — `RoundEngine` (`OnModuleInit`) drives the WAITING → RUNNING → CRASHED loop using a `while(true)` async cycle; crash point = `Math.max(1.01, 0.99/Math.random())`; multiplier = `e^(0.06*t)` ticked every 100 ms via `setInterval`
+- `src/game/` — `RoundEngine` (`OnModuleInit`) drives the WAITING → RUNNING → CRASHED loop using a `while(true)` async cycle; crash point = `Math.max(1.01, 0.99/Math.random())`; multiplier = `e^(0.06*t)` ticked every 100 ms via `setInterval`. Also `EngineAdminController` — the operator control surface (see *Operator control*)
 - `src/socket/` — `GameGateway` allows **guest connections** (no token) so spectators receive `round:*` broadcasts; a valid handshake token, or a mid-session `authenticate` message, joins the `userId` room for private events. `bet:place`/`bet:cashout` reject when `socket.userId` is absent. Uses `forwardRef` to break the circular dependency with `BetsModule`
 - `src/shared/errors/` — `AppError(statusCode, errorCode, message)` + `GlobalExceptionFilter`
 - `src/shared/pipes/` — `ZodValidationPipe` wraps Zod schemas for NestJS `@UsePipes`
@@ -121,6 +122,48 @@ move gets a `wallet_ops` row (`kind` DEBIT|CREDIT|ROLLBACK, `state` PENDING|CONF
 - **Manual recovery:** `POST /api/admin/wallet-ops/retry` under `X-Admin-Key` (`ADMIN_API_KEY`,
   compared with `timingSafeEqual` over SHA-256 digests). Body `{ txRef }` revives one op, an
   empty body revives every FAILED op; 404 for an unknown ref, 409 for one that is not FAILED.
+
+**Operator control (`/api/admin/*`)** — the surface the `backoffice/` console drives.
+All of it sits behind `AdminKeyGuard` (`X-Admin-Key` vs `ADMIN_API_KEY`, compared with
+`timingSafeEqual` over SHA-256 digests) and it is the **only** way the backoffice may change
+anything here: it reads this database directly through a read-only Postgres role and writes
+exclusively over these routes, so every state change still goes through the engine that owns the
+bets, the outbox and the broadcasts.
+
+- `GET /api/admin/engine` → `{ phase, roundId, multiplier, paused }`, read from **Redis** rather
+  than from the engine's fields, so it answers the same whether this process is running the loop
+  or was just restarted under a standing pause.
+- `POST /api/admin/engine/pause { paused }` — **graceful by definition**: the flag is checked in
+  `runCycle` *before a round is created*, never inside one, so whatever is in flight plays out and
+  settles in full and only the next round is withheld. The flag lives in Redis
+  (`game:enginePaused`), not in memory — a deploy in the middle of a paused night must not quietly
+  resume the game. Idempotent: the value carries the intent, so a nervous double-click is a
+  successful no-op. `awaitResumeIfPaused` polls the key every **1 s**, which is the whole cost:
+  resuming can lag up to a second, and in exchange the pause needs no pub/sub and survives a
+  restart. `round:paused` / `round:resumed` are broadcast **once, on the transition**; clients that
+  connect mid-pause are told instead by `GameGateway.handleConnection`, without which a page opened
+  during a pause would sit through silence with no idea why.
+- `POST /api/admin/rounds/current/crash` — **409 unless the phase is RUNNING.** Refusing loudly
+  matters: silently accepting during WAITING would arm a request that lands on the round *after*
+  the one the operator was looking at. It raises an in-memory field (not Redis — unlike the pause,
+  a force-crash only makes sense for the round this process is running, and must not survive a
+  restart), which the 100 ms tick consumes **after** `markAutoCashouts`, so everyone whose
+  auto-cashout the round had already reached is paid: below the forced point they win, above it
+  they lose, exactly as in a natural crash. `applyForceCrash` then rewrites `crash_point` to the
+  multiplier the tick observed, stamps `forced_at`, and assigns `round.crashPoint` on the in-memory
+  object — `runCrashed` broadcasts *that* object, so without the assignment every client would be
+  told the round ended at its original, never-reached crash point. The request dies with the round
+  it was aimed at whether it fired or not.
+- **`rounds.forced_at`** records that a round was ended by hand, and nothing else. A round whose
+  crash point was rewritten mid-flight must stay distinguishable from a fair one forever, including
+  in exports that never see the console — but **who** pressed the button is deliberately not stored
+  here; that is the backoffice's audit log.
+- Accepted cost of the `rounds_crash_point_min` CHECK: a force-crash inside the first ~0.16 s
+  records `crash_point = 1.01`, slightly above the multiplier actually reached, because the clamp
+  is what keeps the write from being refused and leaving the round running with nothing to show for
+  the operator's click.
+- Single-instance assumption: the force-crash flag is process memory, like the game loop itself, so
+  neither survives horizontal scaling.
 
 **Idempotent cashout** — `betRepo.cashOut` is `UPDATE ... WHERE id=$1 AND status='PLACED' RETURNING *`, so concurrent cashout requests can't double-credit: the loser gets zero rows back.
 

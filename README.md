@@ -13,6 +13,7 @@ white-label over a seamless-wallet API. Design details live in each service's `C
 white-label/           NestJS + Prisma + Postgres — money + identity authority, lobby HTML
 platform/              NestJS API + game engine (thin wallet/auth client of the white-label)
 frontend/crash-pilot/  React 19 + Vite UI (iframe player)
+backoffice/            NestJS + react-admin in one process — staff console for the platform
 scripts/               whitelabel-smoke.mjs (end-to-end money-chain smoke)
 ```
 
@@ -67,11 +68,24 @@ npm install
 npm run dev                 # http://localhost:5174 (open it via the lobby, not directly)
 ```
 
+### 5. Backoffice (staff console, optional)
+
+```bash
+cd backoffice
+cp .env.example .env        # set BACKOFFICE_JWT_SECRET; ADMIN_API_KEY must match the platform
+npm install
+npm run dev                 # http://localhost:4300 — log in as admin/admin
+```
+
+One command starts both halves (Nest + the Vite dev server). Nest is the only port you open: it
+proxies the console and serves the API on the same origin. Needs Postgres up and — for the three
+operator actions — the platform running.
+
 ## Run the full stack with Docker
 
 A root `docker-compose.yml` runs everything — Postgres, Redis, the
-white-label, the game backend, and the frontend — in containers with hot reload
-(source is bind-mounted):
+white-label, the game backend, the frontend, and the staff backoffice — in
+containers with hot reload (source is bind-mounted):
 
 ```bash
 docker compose up --build
@@ -91,6 +105,7 @@ them via a root `.env` (copy `.env.example`):
 | Casino lobby (white-label) | http://localhost:4200/lobby | `WHITELABEL_PORT` |
 | Frontend (game iframe) | http://localhost:5274 | `FRONTEND_PORT` |
 | Game backend (API + Socket.IO) | http://localhost:4100 | `BACKEND_PORT` |
+| Backoffice (staff console) | http://localhost:4300 — `admin` / `admin` | `BACKOFFICE_PORT` |
 | Redis | `localhost:6479` | `REDIS_PORT` |
 | Postgres | `localhost:5532` | `PG_PORT` |
 
@@ -99,6 +114,13 @@ Notes:
 - The game backend reads `platform/.env` for app config; Compose overrides
   `POSTGRES_URL`, `REDIS_URL`, `CORS_ORIGIN`, and the white-label wiring
   (`WALLET_API_URL`, `OPERATOR_*`). Make sure `platform/.env` exists.
+- The backoffice needs **no** `.env` under Compose — every required variable is
+  set in `docker-compose.yml`. Its accounts and audit log live in SQLite at
+  `backoffice/data/backoffice.db` (gitignored, survives rebuilds); the first
+  admin is created only while that table is empty, so change the password in the
+  UI rather than in the environment. On a **cold first start** it can lose the
+  race with the platform's migrations, log a schema-drift error and exit —
+  `restart: unless-stopped` brings it back once `crash_pilot` exists.
 - `OPERATOR_API_KEY` / `OPERATOR_SECRET` are the shared HMAC credentials between
   the platform and the white-label — they **must match** on both sides (Compose
   defaults them consistently).
@@ -151,6 +173,19 @@ service's `.env.example` for the full list; the load-bearing ones:
 **Frontend (`frontend/crash-pilot/`):** `VITE_API_URL` / `VITE_SOCKET_URL` (platform backend),
 `VITE_LOBBY_ORIGIN` (lobby origin authorized to frame the game via CSP + postMessage).
 
+**Backoffice (`backoffice/`)** — staff console:
+
+| Variable | Description |
+|---|---|
+| `POSTGRES_ADMIN_URL` | Superuser URL for `crash_pilot`. Used **only at boot**, to create the read-only role the runtime pool then logs in as |
+| `POSTGRES_RO_USER` / `POSTGRES_RO_PASSWORD` | That read-only role; host/port/database are taken from the URL above |
+| `SQLITE_PATH` | Console's own store — operator accounts + audit log |
+| `BACKOFFICE_JWT_SECRET` | Signs the session cookie. **No default** — the service refuses to boot without it |
+| `BACKOFFICE_ADMIN_USER` / `BACKOFFICE_ADMIN_PASSWORD` | First admin, created only while the users table is empty |
+| `PLATFORM_API_URL` / `ADMIN_API_KEY` | Every write goes through the platform's admin API; the key **must match** the platform's and never reaches the browser |
+| `BACKOFFICE_PUBLIC_PORT` | Dev only: the port the browser reaches Nest on, so Vite can tell its HMR client where to dial back |
+| `STUCK_OP_MINUTES` | Age at which a pending money op counts as stuck on the dashboard (default `5`) |
+
 ## Architecture
 
 ### White-label (`white-label/`)
@@ -179,6 +214,21 @@ lobby's single-use `?token=` for a platform JWT (held in memory), renders server
 state via `requestAnimationFrame`, and mirrors balance/session events to the lobby over
 `postMessage`. Opened without a token it's a guest spectator. See `frontend/crash-pilot/CLAUDE.md`.
 
+### Backoffice (`backoffice/`)
+
+NestJS 11 + React 19 (react-admin 5) in **one process on one port** — Nest proxies the Vite dev
+server in development and serves its build in production, so the session cookie works with no CORS
+and no second origin. The **staff console for the platform**: rounds, bets and the `wallet_ops`
+outbox, plus three operator actions — pause/resume the round loop, force-crash the current round,
+retry money moves the outbox gave up on. Roles are `viewer` / `operator` / `admin`.
+
+Its two boundaries are the whole design: it **reads** `crash_pilot` directly but through a
+**read-only Postgres role** it creates for itself at boot, and it **writes** nothing there — every
+change goes over the platform's `/api/admin/*` under `x-admin-key`, so the money outbox stays the
+only path a balance can move along. Its own accounts and audit log live in SQLite, which is also
+what lets you log in and read the trail when the platform's database is the thing that is broken.
+White-label entities are deliberately out of scope. See `backoffice/CLAUDE.md`.
+
 ## Development commands
 
 | Location | Command | Purpose |
@@ -189,4 +239,7 @@ state via `requestAnimationFrame`, and mirrors balance/session events to the lob
 | `platform` | `npm run typecheck` | TypeScript check |
 | `frontend/crash-pilot` | `npm test` | Vitest unit tests |
 | `frontend/crash-pilot` | `npm run typecheck` | TypeScript check |
+| `backoffice` | `npm run dev` | Nest + the react-admin dev server, one command, one port |
+| `backoffice` | `npm run typecheck` | TypeScript check (server **and** client) |
+| `backoffice` | `RUN_PG_SMOKE=1 npm test` | Schema-drift smoke against a live `crash_pilot` (opt-in, read-only) |
 | _(repo root)_ | `node scripts/whitelabel-smoke.mjs` | End-to-end money-chain smoke (stack must be up) |

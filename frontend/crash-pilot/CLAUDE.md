@@ -81,6 +81,24 @@ per-slot bet state, and `balance`. Actions: `placeBet`, `cashOut`, `clearError`.
 - **Guest vs authed**: private state (`balance`, `slots`) is fetched only when authenticated and is
   *derived as null/empty at the return* when not — no setState-on-logout. Reconnect re-pulls
   `/api/wallet` + `/api/bets/active`.
+- **Operator pause** (`paused`): an operator can stop the round loop from the backoffice console.
+  The engine finishes and settles whatever is in flight and simply does not start the next round, so
+  without a signal the client would show a WAITING phase with a countdown of 0 that never advances —
+  indistinguishable from a dead socket. So the pause is **announced, not inferred**:
+  `round:paused` / `round:resumed` set the flag and nothing else (the last crash stays on screen
+  under the overlay). Three details worth keeping:
+  - The engine broadcasts each event **once, on the transition**; a client that connects mid-pause is
+    told by the platform's `GameGateway.handleConnection` instead.
+  - `round:waiting` / `round:started` / a mid-round `round:multiplier` all clear the flag, because a
+    round starting is proof the engine is not paused. This is a real race, not defensiveness: a
+    socket connecting in the instant between the operator resuming and the gateway's late-join check
+    receives `round:paused` and never sees the `round:resumed` broadcast just before it arrived,
+    leaving the overlay up over a visibly running game.
+  - `GameCanvas` suppresses "Next round in 0s" while paused and draws a translucent *Rounds paused*
+    overlay; `BettingPanel` disables **both** new-money actions (place and queue-for-next-round) but
+    keeps cancel and cash-out live — queueing is harmless money-wise, since the stake is debited only
+    when `runWaiting()` actually places the bet, but naming a "next round" nobody has scheduled is a
+    promise the UI cannot keep.
 
 ### Auth (`src/auth/`)
 
