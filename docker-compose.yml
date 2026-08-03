@@ -134,6 +134,10 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
       # Vite runs in this same container, so localhost is the right address here.
       VITE_DEV_SERVER_URL: http://localhost:5175
+      # The published port, which is the only one the browser knows. Vite needs
+      # it to tell the HMR client where to dial back — 5175 exists only inside
+      # this container.
+      BACKOFFICE_PUBLIC_PORT: ${BACKOFFICE_PORT:-4300}
       STUCK_OP_MINUTES: 5
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: 500

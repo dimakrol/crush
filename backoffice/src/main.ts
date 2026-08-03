@@ -1,5 +1,6 @@
 import './config/env'; // validates env vars on startup
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
@@ -9,6 +10,7 @@ import { closeSqlite, migrateSqlite, openSqlite } from './config/sqlite';
 import { bootstrapAdmin } from './startup/bootstrap-admin';
 import { ensureReadonlyRole } from './startup/readonly-role';
 import { assertPlatformSchema } from './startup/schema-guard';
+import { serveClient } from './startup/serve-client';
 import { logger } from './shared/utils/logger';
 
 async function bootstrap() {
@@ -24,16 +26,42 @@ async function bootstrap() {
   migrateSqlite();
   await bootstrapAdmin();
 
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
 
-  app.use(helmet());
+  const isDev = env.NODE_ENV !== 'production';
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          // MUI's styling engine writes <style> tags at runtime, so the
+          // console cannot run under a style-src that forbids inline.
+          'style-src': ["'self'", "'unsafe-inline'"],
+          'img-src': ["'self'", 'data:'],
+          // Two dev-only holes, both belonging to Vite: the react-refresh
+          // preamble is an inline module script, and HMR is a websocket the
+          // browser opens back to this same origin. Neither exists in the
+          // build, so production keeps script-src at 'self'.
+          'script-src': isDev ? ["'self'", "'unsafe-inline'"] : ["'self'"],
+          'connect-src': isDev ? ["'self'", 'ws:'] : ["'self'"],
+          // Dropped from the defaults: the console is reached over plain http
+          // on a workstation and behind a terminating proxy in production, and
+          // in the first case this directive breaks every request it rewrites.
+          'upgrade-insecure-requests': null,
+        },
+      },
+    }),
+  );
   // The session cookie is httpOnly, so the server is the only reader of it.
   app.use(cookieParser());
 
   // No CORS: Nest is the single origin — it proxies to the Vite dev server in
-  // development and serves client/dist in production (phase 5).
+  // development and serves client/dist in production. Registered before
+  // listen(), therefore ahead of Nest's own router, so the SPA fallback sees
+  // every path the API did not claim.
+  serveClient(app);
 
   await app.listen(env.PORT);
   logger.info(`Backoffice started on port ${env.PORT}`);

@@ -1,6 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// The port the operator's browser is actually talking to — Nest's, not this
+// one. Vite is reached only through Nest's dev proxy and its own port is never
+// published, so anything the *client* half of HMR needs has to be told the
+// outside address explicitly.
+const publicPort = Number(process.env.BACKOFFICE_PUBLIC_PORT ?? 4300);
+
 // The client is served through Nest, never directly: in dev Nest proxies
 // everything but /api here (including the HMR websocket), in prod it serves
 // the build output. One origin means the httpOnly session cookie behaves
@@ -17,6 +23,17 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5175,
     strictPort: true,
+    // The page came from Nest, so the HMR client would otherwise dial 5175 on
+    // the operator's machine and find nothing there. Only the port is
+    // overridden — the host stays whatever the page was loaded from, so this
+    // keeps working over a LAN address or an SSH tunnel.
+    hmr: { clientPort: publicPort },
+    // Vite's Host header check protects a dev server a browser can reach. This
+    // one it cannot: it listens inside the container on a port nothing
+    // publishes, and Nest is its only possible client. Left on, the check would
+    // reject every host name but localhost — including the LAN address a second
+    // machine would use to reach Nest.
+    allowedHosts: true,
   },
   build: {
     outDir: 'dist',
