@@ -1,0 +1,145 @@
+# Base observability stack (Prometheus + Grafana + Loki) for the crush stack.
+#
+# Lives in its own Compose project so it can be restarted/upgraded independently
+# of the product. It attaches to the app stack's network (`crush_default`) as an
+# external network so the datastore exporters can reach `postgres`/`redis` by
+# name. Bring the app stack up first (it creates that network), then this one:
+#
+#   docker compose up -d                 # from repo root — creates crush_default
+#   docker compose -f monitoring/docker-compose.yml up -d
+#
+# Only Grafana is published, and only on 127.0.0.1 — reach it via SSH tunnel:
+#   ssh -L 3000:localhost:3000 <server>  then open http://localhost:3000
+name: crush-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    # 127.0.0.1 only — no public HTTP login exposed. Use an SSH tunnel.
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.6.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only access to the Docker socket for container log discovery.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    networks:
+      - monitoring
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # Host/container exporters read the host kernel & rootfs directly, so they only
+  # make sense on the real deployed Linux host — on Docker Desktop (Mac/Windows)
+  # they'd measure the LinuxKit VM, and node-exporter's `rslave` bind fails there
+  # ("path / ... is not a shared or slave mount"). Gated behind the `host-metrics`
+  # profile: skipped by a plain `up`, enabled on the server with
+  # `--profile host-metrics` (or COMPOSE_PROFILES=host-metrics in the server .env).
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    profiles: ["host-metrics"]
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    profiles: ["host-metrics"]
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    environment:
+      # Instance-level metrics are global across all databases on the server.
+      DATA_SOURCE_NAME: "postgresql://${PG_EXPORTER_USER:-whitelabel}:${PG_EXPORTER_PASSWORD:-whitelabel}@postgres:5432/whitelabel?sslmode=disable"
+    networks:
+      - monitoring
+      - crush
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    networks:
+      - monitoring
+      - crush
+    restart: unless-stopped
+
+networks:
+  monitoring:
+    driver: bridge
+  # The app stack's default network. Created by the root docker-compose.yml.
+  crush:
+    external: true
+    name: crush_default
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  alloy_data:

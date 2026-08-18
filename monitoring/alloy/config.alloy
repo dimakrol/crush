@@ -1,0 +1,63 @@
+// Grafana Alloy: tail every container's stdout/stderr and ship to Loki.
+// Logs are already JSON (level/msg/meta/ts) — we only lift `level` into a label
+// (low cardinality); everything else stays in the line for query-time `| json`.
+
+// Discover all Docker containers on this host.
+discovery.docker "all" {
+	host = "unix:///var/run/docker.sock"
+}
+
+// Label rules. Empty `targets` — this block is consumed only for its `rules`.
+discovery.relabel "docker" {
+	targets = []
+
+	// Container name arrives as "/name" — strip the leading slash.
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "service"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	// Static host label.
+	rule {
+		target_label = "host"
+		replacement  = "crush-host"
+	}
+}
+
+// Tail the discovered containers.
+loki.source.docker "all" {
+	host          = "unix:///var/run/docker.sock"
+	targets       = discovery.docker.all.targets
+	relabel_rules = discovery.relabel.docker.rules
+	forward_to    = [loki.process.parse.receiver]
+}
+
+// Lift `level` from the JSON payload into a label.
+loki.process "parse" {
+	stage.json {
+		expressions = {
+			level = "level",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level = "",
+		}
+	}
+
+	forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}
