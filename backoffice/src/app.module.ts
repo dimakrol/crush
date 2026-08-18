@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AppController } from '@/app.controller';
+import { DatabaseModule } from './database/database.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { MetricsInterceptor } from './metrics/metrics.interceptor';
 import { AuditGuard } from './modules/audit/audit.guard';
@@ -19,6 +20,7 @@ import { GlobalExceptionFilter } from './shared/errors/error.filter';
 
 @Module({
   imports: [
+    DatabaseModule,
     MetricsModule,
     AuditModule,
     AuthModule,

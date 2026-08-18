@@ -8,10 +8,8 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
-import { count, eq } from 'drizzle-orm';
 import { Response } from 'express';
 import { z } from 'zod';
-import { getDrizzle } from '../../config/postgres';
 import {
   walletOpKind,
   walletOpState,
@@ -32,6 +30,7 @@ import {
   uuidFilter,
 } from '../../shared/ra/list-query';
 import { PlatformAdminClient } from '../platform/platform-admin.client';
+import { WalletOpRow, WalletOpsRepository } from './wallet-ops.repository';
 
 const SPEC: ListSpec = {
   resource: 'wallet-ops',
@@ -59,7 +58,6 @@ const SPEC: ListSpec = {
   },
 };
 
-type WalletOpRow = typeof walletOps.$inferSelect;
 function toDto(row: WalletOpRow) {
   return { ...row, amount: Number(row.amount) };
 }
@@ -73,31 +71,22 @@ type RetryDto = z.infer<typeof retrySchema>;
 
 @Controller('api/wallet-ops')
 export class WalletOpsController {
-  constructor(private readonly platform: PlatformAdminClient) {}
+  constructor(
+    private readonly repo: WalletOpsRepository,
+    private readonly platform: PlatformAdminClient,
+  ) {}
 
   @Get()
   async list(
     @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { where, orderBy, start, limit } = parseListQuery(query, SPEC);
-    const db = getDrizzle();
-
-    const [{ value: total }] = await db
-      .select({ value: count() })
-      .from(walletOps)
-      .where(where);
-    const rows = await db
-      .select()
-      .from(walletOps)
-      .where(where)
-      .orderBy(orderBy)
-      .limit(limit)
-      .offset(start);
+    const parsed = parseListQuery(query, SPEC);
+    const { rows, total } = await this.repo.list(parsed);
 
     res.setHeader(
       'Content-Range',
-      contentRange(SPEC.resource, start, rows.length, total),
+      contentRange(SPEC.resource, parsed.start, rows.length, total),
     );
     return { data: rows.map(toDto) };
   }
@@ -118,14 +107,10 @@ export class WalletOpsController {
 
   @Get(':id')
   async one(@Param('id') id: string) {
-    const row = await getDrizzle()
-      .select()
-      .from(walletOps)
-      .where(eq(walletOps.id, assertUuid(id)))
-      .limit(1);
-    if (!row.length) {
+    const row = await this.repo.findById(assertUuid(id));
+    if (!row) {
       throw new AppError(404, ErrorCode.NOT_FOUND, `No wallet op ${id}`);
     }
-    return { data: toDto(row[0]) };
+    return { data: toDto(row) };
   }
 }

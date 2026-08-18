@@ -9,10 +9,8 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
-import { count } from 'drizzle-orm';
 import { Response } from 'express';
 import { z } from 'zod';
-import { getSqlite } from '../../config/sqlite';
 import { ROLES, users } from '../../drizzle/admin.schema';
 import { CurrentUser, Roles } from '../../shared/auth/auth.decorators';
 import { SessionUser } from '../../shared/auth/session';
@@ -24,7 +22,8 @@ import {
   parseListQuery,
   stringFilter,
 } from '../../shared/ra/list-query';
-import { PUBLIC_COLUMNS, UsersService } from './users.service';
+import { UsersRepository } from './users.repository';
+import { UsersService } from './users.service';
 
 const SPEC: ListSpec = {
   resource: 'users',
@@ -63,33 +62,25 @@ const updateSchema = z.object({
 @Controller('api/users')
 @Roles('admin')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly repo: UsersRepository,
+  ) {}
 
+  // A read with no rules of its own, so it goes straight to the repository; the
+  // routes below carry the uniqueness and last-admin guarantees, so they go
+  // through the service.
   @Get()
   list(
     @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { where, orderBy, start, limit } = parseListQuery(query, SPEC);
-    const db = getSqlite();
-
-    const [{ value: total }] = db
-      .select({ value: count() })
-      .from(users)
-      .where(where)
-      .all();
-    const rows = db
-      .select(PUBLIC_COLUMNS)
-      .from(users)
-      .where(where)
-      .orderBy(orderBy)
-      .limit(limit)
-      .offset(start)
-      .all();
+    const parsed = parseListQuery(query, SPEC);
+    const { rows, total } = this.repo.list(parsed);
 
     res.setHeader(
       'Content-Range',
-      contentRange(SPEC.resource, start, rows.length, total),
+      contentRange(SPEC.resource, parsed.start, rows.length, total),
     );
     return { data: rows };
   }

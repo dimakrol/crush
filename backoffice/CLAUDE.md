@@ -85,22 +85,86 @@ platform's model moved, and a console showing a stale picture of the money domai
 without saying so is worse than one that will not start. The fix is a copy edit.
 `tests/platform-schema.smoke.spec.ts` is the deeper (per-column `SELECT`) check.
 
+## Layering: controller → repository → (service only where it earns it)
+
+**Every database query lives in a repository.** Controllers hold no SQL; they
+translate the HTTP wire contract, and hand a parsed request to a repository. A
+service sits between the two **only** where there is a real decision to make
+(the operator-account rules, the dashboard's fail-independently orchestration) —
+never as an empty pass-through.
+
+**The database handles arrive by DI, but the connections do not.** The pool and
+the SQLite handle are still opened imperatively in `main.ts`, before
+`NestFactory`, because the boot order above is part of the security design and
+must not dissolve into Nest's lifecycle. `DatabaseModule` (`src/database/`, and
+`@Global()`) is a thin bridge: two factory providers, `DRIZZLE_PG` and
+`SQLITE_DB`, that just return the already-connected singletons. Nest instantiates
+providers only after `NestFactory.create()`, which runs once the connects have
+succeeded — so a repository injecting a token never races the boot.
+
+**Two base classes carry the list contract**, one per dialect, because the
+platform tables are async Postgres and the console's tables are synchronous
+better-sqlite3:
+
+- `src/shared/db/pg-list.repository.ts` — `PgListRepository<Row>`: `list()`
+  returns `{ rows, total }` (the total is the `Content-Range` count); `findById()`
+  returns `Row | undefined`.
+- `src/shared/db/sqlite-list.repository.ts` — the same, synchronous, and it takes
+  a **column projection**: `UsersRepository` passes `PUBLIC_COLUMNS` so a list can
+  never select `password_hash`; the audit log omits it and selects every column.
+
+Concrete repositories extend the matching base and add whatever else their table
+needs (`UsersRepository.findByUsernameWithHash`, `AuditRepository.insert`,
+`DashboardRepository`'s two count queries).
+
+**Rules that keep the boundary honest:**
+
+- **A repository never throws an HTTP error.** `findById` returns `undefined`; the
+  404 (and the `assertUuid` 400) is raised by the caller — the controller for the
+  read-only resources, `UsersService` for accounts. Keeping `AppError` status
+  codes out of the data layer is what lets a repository be reused by a service, a
+  guard (`AuditRepository` is written from `AuditGuard`) or another controller
+  without dragging one caller's HTTP semantics into another's.
+- **`parseListQuery` stays in the controller.** The react-admin query string
+  (`filter`/`range`/`sort`) and the per-resource `ListSpec` are the HTTP wire
+  contract; the controller parses and whitelists, then passes the plain
+  `where`/`orderBy`/`start`/`limit` to `repo.list()`. See *Server-side list
+  contract* below.
+- **`toDto` stays at the controller edge.** Postgres `numeric` arrives as a string
+  and `count()` as a bigint-string; the money-row conversion (`amount`, `payout` →
+  `Number`) is applied by the controller after the repository returns raw rows, so
+  the repository stays a faithful mirror of the row and one place decides the
+  display shape. (Aggregate counts the UI only ever reads as numbers — the list
+  `total`, the dashboard counters — are converted inside the repository.)
+
 **Modules** (`src/modules/`) — one per resource, all under `/api`:
 
-| Route | Role | Notes |
+| Route | Role | Data path |
 |---|---|---|
 | `POST /api/auth/login`, `POST /api/auth/logout` | `@Public()` | sets/clears the `bo_session` cookie |
-| `GET /api/auth/me` | any | the session probe react-admin's `checkAuth` calls |
-| `GET /api/dashboard` | viewer+ | engine state (via the platform) + stuck-work counters (via SQL) |
-| `GET /api/rounds`, `/api/rounds/:id` | viewer+ | Postgres, read-only |
-| `GET /api/bets`, `/api/bets/:id` | viewer+ | Postgres, read-only |
-| `GET /api/wallet-ops`, `/api/wallet-ops/:id` | viewer+ | Postgres, read-only |
-| `POST /api/wallet-ops/retry` | operator, admin | → platform `POST /api/admin/wallet-ops/retry` |
-| `POST /api/engine/pause` | operator, admin | → platform `POST /api/admin/engine/pause` |
-| `POST /api/engine/force-crash` | operator, admin | → platform `POST /api/admin/rounds/current/crash` |
-| `GET /api/users` + CRUD | admin | SQLite |
-| `GET /api/audit-log` | admin | SQLite |
+| `GET /api/auth/me` | any | the session probe react-admin's `checkAuth` calls; no DB read |
+| `GET /api/dashboard` | viewer+ | `DashboardService`: engine (via platform) + stuck-work counters (`DashboardRepository`) |
+| `GET /api/rounds`, `/api/rounds/:id` | viewer+ | `RoundsRepository`, Postgres read-only |
+| `GET /api/bets`, `/api/bets/:id` | viewer+ | `BetsRepository`, Postgres read-only |
+| `GET /api/wallet-ops`, `/api/wallet-ops/:id` | viewer+ | `WalletOpsRepository`, Postgres read-only |
+| `POST /api/wallet-ops/retry` | operator, admin | → platform `POST /api/admin/wallet-ops/retry` (no DB) |
+| `POST /api/engine/pause` | operator, admin | → platform `POST /api/admin/engine/pause` (no DB) |
+| `POST /api/engine/force-crash` | operator, admin | → platform `POST /api/admin/rounds/current/crash` (no DB) |
+| `GET /api/users` + CRUD | admin | `UsersService` + `UsersRepository`, SQLite |
+| `GET /api/audit-log` | admin | `AuditRepository`, SQLite |
 | `GET /api/health` | `@Public()` | `/` belongs to the SPA, so health lives under `/api` |
+
+`UsersModule` exports `UsersRepository` so `AuthModule` reads credentials through
+the one owner of the `users` table (`findByUsernameWithHash` — the single query
+that includes the hash). `AuditModule` is `@Global` because `AuditGuard` is an
+app-wide guard resolved from the root injector; its `AuditRepository` reaches
+`SQLITE_DB` through the global `DatabaseModule`, so it resolves there too.
+
+**Not on the repository layer, on purpose:** `src/metrics/stuck-work.collector.ts`
+runs the same stuck-work counts as the dashboard directly against `getDrizzle()`.
+It is a Prometheus pull-model `collect` callback, not a request handler, and is
+left as-is; if you touch it, note the duplication rather than assume it flows
+through `DashboardRepository`.
 
 **Three global guards, and their order is the access-control design**
 (`app.module.ts`):
@@ -121,6 +185,10 @@ No token in JS, so no XSS-readable session; no CORS, because there is only one
 origin. The role travels in the token, so a demotion takes effect on the next
 login — acceptable at this scale, worth remembering when revoking access.
 
+`AuthService` compares against a `DUMMY_HASH` when the username does not exist, so
+"no such user" and "wrong password" take the same ~250ms — otherwise the timing
+gap is a reliable oracle for enumerating operator accounts.
+
 **Roles:**
 
 | | viewer | operator | admin |
@@ -132,8 +200,9 @@ login — acceptable at this scale, worth remembering when revoking access.
 `bootstrapAdmin()` creates `BACKOFFICE_ADMIN_USER` / `_PASSWORD` **only while the
 users table is empty** — so changing those vars later does nothing, and a
 password changed in the UI is never reverted by a restart. `UsersService` refuses
-to demote or delete the **last admin**; that check plus the `users_role_valid`
-CHECK constraint are what keep the console from locking everyone out.
+to demote or delete the **last admin** (`UsersRepository.countOtherAdmins`); that
+check plus the `users_role_valid` CHECK constraint are what keep the console from
+locking everyone out.
 
 ## Client (`client/`)
 
@@ -177,11 +246,14 @@ camelCase name would request `/api/walletOps` and 404. Menu labels come from
 `?filter={json}&range=[start,end]&sort=["field","ORDER"]` +
 `Content-Range: <resource> <start>-<end>/<total>`. Nothing about it is generic:
 the sort field and every filter key are attacker-controlled strings that would
-otherwise be spliced into SQL, so each resource declares exactly which columns
-are sortable and how each filter maps to a condition. An unknown filter is a
-**400, never a silent no-op** — a filter the server quietly drops shows a list
-that is wrong in the one way the operator asked it not to be. Rows per request
-are capped at 500, which is why every list sets `exporter={false}`.
+otherwise be spliced into SQL, so each resource declares (in its controller's
+`ListSpec`) exactly which columns are sortable and how each filter maps to a
+condition. An unknown filter is a **400, never a silent no-op** — a filter the
+server quietly drops shows a list that is wrong in the one way the operator asked
+it not to be. Rows per request are capped at 500, which is why every list sets
+`exporter={false}`. `parseListQuery` builds the dialect-independent
+`where`/`orderBy` and the controller passes them to the repository, which is
+where the two queries (`total`, then the page) actually run.
 
 Two client-side details that are load-bearing: date filters are normalised to an
 absolute ISO instant in the browser (`IsoDateTimeInput`), because the container
@@ -193,14 +265,18 @@ money.
 ## Audit log
 
 `AuditGuard` records every `POST/PUT/PATCH/DELETE` under `/api` except
-`/api/auth/*` (a login body is a password). The action name is **derived from the
-route**, never from a decorator — an action you have to remember to annotate is
-one that eventually is not audited: static segments after `/api` joined with dots,
-and a single segment gets the verb appended (`users.create`, `engine.pause`,
+`/api/auth/*` (a login body is a password), writing through `AuditService` →
+`AuditRepository.insert`. The action name is **derived from the route**, never
+from a decorator — an action you have to remember to annotate is one that
+eventually is not audited: static segments after `/api` joined with dots, and a
+single segment gets the verb appended (`users.create`, `engine.pause`,
 `wallet-ops.retry`). Any key matching `/password|secret|token|key/i` is
 `[redacted]` before the body is stored. The row is written from a `finish`/`close`
 response listener, so the recorded status is the one the operator actually got —
 403 from a guard, 409 forwarded from the platform, 500 from a bug.
+`AuditService.record` swallows a write failure into the log rather than the
+response: it runs after the response is already sent, and a silently empty audit
+table is still worse than a loud log line.
 
 `audit_log` has **no FK** to `users` and denormalizes `username`: the trail must
 outlive the account, and it records who they were at the time.
@@ -237,8 +313,9 @@ accepted costs). Adding a route means checking its role gate yourself.
 - The dev proxy's `upgrade` listener is subscribed by the middleware itself on the
   first proxied request. Adding `server.on('upgrade', proxy.upgrade)` attaches a
   second listener and proxies every websocket twice.
-- Postgres `numeric` arrives as a string and `count()` as a bigint-string; both
-  are converted at the controller edge, never in the client.
+- Postgres `numeric` arrives as a string and `count()` as a bigint-string. Money
+  rows are converted at the controller edge (`toDto`), aggregate counts inside the
+  repository; never in the client.
 - `GlobalExceptionFilter` maps every `HttpException` to
   `ErrorCode.VALIDATION_ERROR`, so a 404 from an unmatched route carries a
   misleading code. Cosmetic — react-admin branches on the status — but do not

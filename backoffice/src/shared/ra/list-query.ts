@@ -28,8 +28,9 @@ import { ErrorCode } from '../errors/error-codes';
 // What this file does NOT do is run the query: the platform tables are Postgres
 // and the console's own tables are SQLite, and the two dialects have different
 // builder types. Everything dialect-independent — parsing, whitelisting,
-// building `where`/`order by` as plain `SQL` — lives here; the four lines that
-// execute stay in each controller, typed against their own database.
+// building `where`/`order by` as plain `SQL` — lives here; the controller passes
+// the parsed result to a repository (PgListRepository / SqliteListRepository),
+// which is where the query is actually executed against its own database.
 
 export interface ListSpec {
   // Name used in the Content-Range header. react-admin ignores it, humans

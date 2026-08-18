@@ -1,7 +1,5 @@
 import { Controller, Get, Param, Query, Res } from '@nestjs/common';
-import { count, eq } from 'drizzle-orm';
 import { Response } from 'express';
-import { getDrizzle } from '../../config/postgres';
 import { betStatus, bets } from '../../drizzle/platform.schema';
 import { AppError } from '../../shared/errors/AppError';
 import { ErrorCode } from '../../shared/errors/error-codes';
@@ -16,6 +14,7 @@ import {
   stringFilter,
   uuidFilter,
 } from '../../shared/ra/list-query';
+import { BetRow, BetsRepository } from './bets.repository';
 
 const SPEC: ListSpec = {
   resource: 'bets',
@@ -49,50 +48,35 @@ const SPEC: ListSpec = {
 // wants to sort and total them, so they are converted here, at the edge — the
 // values are money in display units, well inside what a double represents
 // exactly.
-type BetRow = typeof bets.$inferSelect;
 function toDto(row: BetRow) {
   return { ...row, amount: Number(row.amount), payout: Number(row.payout) };
 }
 
 @Controller('api/bets')
 export class BetsController {
+  constructor(private readonly repo: BetsRepository) {}
+
   @Get()
   async list(
     @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { where, orderBy, start, limit } = parseListQuery(query, SPEC);
-    const db = getDrizzle();
-
-    const [{ value: total }] = await db
-      .select({ value: count() })
-      .from(bets)
-      .where(where);
-    const rows = await db
-      .select()
-      .from(bets)
-      .where(where)
-      .orderBy(orderBy)
-      .limit(limit)
-      .offset(start);
+    const parsed = parseListQuery(query, SPEC);
+    const { rows, total } = await this.repo.list(parsed);
 
     res.setHeader(
       'Content-Range',
-      contentRange(SPEC.resource, start, rows.length, total),
+      contentRange(SPEC.resource, parsed.start, rows.length, total),
     );
     return { data: rows.map(toDto) };
   }
 
   @Get(':id')
   async one(@Param('id') id: string) {
-    const row = await getDrizzle()
-      .select()
-      .from(bets)
-      .where(eq(bets.id, assertUuid(id)))
-      .limit(1);
-    if (!row.length) {
+    const row = await this.repo.findById(assertUuid(id));
+    if (!row) {
       throw new AppError(404, ErrorCode.NOT_FOUND, `No bet ${id}`);
     }
-    return { data: toDto(row[0]) };
+    return { data: toDto(row) };
   }
 }
