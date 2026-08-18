@@ -28,3 +28,24 @@ scrape_configs:
   - job_name: redis
     static_configs:
       - targets: ['redis-exporter:9121']
+
+  # ── Application metrics (prom-client /metrics in the Nest services) ─────────
+  # Reached by service name on the app stack's crush_default network. All three
+  # listen on container port 4000. See ../../plan_app_metrics.md.
+
+  # Game backend: Node runtime + HTTP RED + bets/rounds/wallet-outbox counters.
+  - job_name: platform
+    static_configs:
+      - targets: ['backend:4000']
+
+  # Operator/money authority: Node runtime + HTTP RED + wallet-movement counters.
+  - job_name: white-label
+    static_configs:
+      - targets: ['white-label:4000']
+
+  # Operator console: Node runtime + HTTP RED + operator-action / stuck-work.
+  # SPA catch-all owns the root path, so metrics live under /api/metrics.
+  - job_name: backoffice
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ['backoffice:4000']

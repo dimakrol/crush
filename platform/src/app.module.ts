@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { GlobalExceptionFilter } from './shared/errors/error.filter';
+import { MetricsModule } from './metrics/metrics.module';
+import { MetricsInterceptor } from './metrics/metrics.interceptor';
 import { AuthModule } from './modules/auth/auth.module';
 import { WalletModule } from './modules/wallet/wallet.module';
 import { WalletOpsModule } from './modules/wallet-ops/wallet-ops.module';
@@ -12,6 +14,7 @@ import { GameModule } from './game/game.module';
 
 @Module({
   imports: [
+    MetricsModule,
     AuthModule,
     WalletModule,
     WalletOpsModule,
@@ -21,6 +24,9 @@ import { GameModule } from './game/game.module';
     SocketModule,
     GameModule,
   ],
-  providers: [{ provide: APP_FILTER, useClass: GlobalExceptionFilter }],
+  providers: [
+    { provide: APP_FILTER, useClass: GlobalExceptionFilter },
+    { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
+  ],
 })
 export class AppModule {}

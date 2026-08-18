@@ -12,6 +12,7 @@ app-стека `crush_default`. См. `../plan_monitoring.md` — источни
 | Хост | node-exporter | диск / память / load |
 | Postgres | postgres_exporter | соединения, запросы, локи, размер БД |
 | Redis | redis_exporter | память, hit-rate, соединения |
+| Приложения | `prom-client` `/metrics` в Nest-сервисах | рантайм Node (event loop lag, heap, GC, CPU), HTTP RED (rate/errors/latency) + бизнес-метрики (ставки/раунды, wallet-outbox, денежные движения оператора, действия в консоли) |
 | Логи | Grafana Alloy → Loki | stdout всех контейнеров (JSON), метки `service`/`container`/`host` + `level` |
 
 Retention: метрики **15 дней** (Prometheus TSDB), логи **15 дней** (Loki filesystem).
@@ -79,8 +80,23 @@ docker compose -f monitoring/docker-compose.yml exec prometheus \
   wget -qO- --post-data='' http://localhost:9090/-/reload
 ```
 
+## Прикладные метрики (слой 3, реализовано)
+
+Каждый Nest-сервис отдаёт Prometheus-формат (`prom-client`): `platform` и
+`white-label` — по `/metrics`, `backoffice` — по `/api/metrics` (корень занят
+SPA-catch-all). Prometheus скрейпит их по именам сервисов (`backend` /
+`white-label` / `backoffice`, порт `4000`). Дашборды: **Node.js Runtime (crush
+services)** и **Crush App (RED + business)**. Детали — `../plan_app_metrics.md`.
+
+```bash
+# быстрая проверка (host-порты), должно быть > 0 строк # HELP/# TYPE:
+curl -s localhost:4100/metrics     | grep -cE '^# (HELP|TYPE)'   # platform
+curl -s localhost:4200/metrics     | grep -cE '^# (HELP|TYPE)'   # white-label
+curl -s localhost:4300/api/metrics | grep -cE '^# (HELP|TYPE)'   # backoffice
+```
+
 ## Вне scope (следующие фазы)
 
-- Прикладные `/metrics` в Nest-сервисах (`prom-client`, RED + бизнес-метрики).
 - Алертинг (Alertmanager / встроенный алертинг Grafana + канал уведомлений).
+- Трейсинг (OpenTelemetry / Tempo), метрики Socket.IO-трафика.
 - Браузерный RUM фронтенда (Grafana Faro).

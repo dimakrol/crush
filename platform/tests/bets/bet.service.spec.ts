@@ -1,4 +1,5 @@
 import { BetService } from '@/modules/bets/bet.service'
+import { MetricsService } from '@/metrics/metrics.service'
 import { IBetRepository } from '@/modules/bets/bet.repository.interface'
 import { IWalletOpsRepository } from '@/modules/wallet-ops/wallet-ops.repository.interface'
 import { WalletService } from '@/modules/wallet/wallet.service'
@@ -68,6 +69,13 @@ const mockWalletService: jest.Mocked<Partial<WalletService>> = {
   getBalance: jest.fn(),
 }
 
+// Metrics are fire-and-forget counters; stub them so the service under test can
+// record without a real registry.
+const mockMetrics: jest.Mocked<Partial<MetricsService>> = {
+  betPlaced: jest.fn(),
+  betCashedOut: jest.fn(),
+}
+
 const makeBet = (overrides: Partial<Bet> = {}): Bet => ({
   id: 'bet1', userId: 'user1', currency: 'USD', roundId: 'round1', slotId: 1, amount: 50, autoCashOut: null,
   status: 'PLACED', cashOutMultiplier: null, payout: 0, placedAt: new Date(),
@@ -83,6 +91,7 @@ beforeEach(() => {
     mockWalletOpsRepo,
     mockUow,
     mockWalletService as unknown as WalletService,
+    mockMetrics as MetricsService,
   )
 })
 

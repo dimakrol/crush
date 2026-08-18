@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { env } from '../../config/env';
+import { MetricsService } from '@/metrics/metrics.service';
 import { AppError } from '../../shared/errors/AppError';
 import { ErrorCode } from '../../shared/errors/error-codes';
 import { logger } from '../../shared/utils/logger';
@@ -24,6 +25,8 @@ interface PlatformErrorBody {
 
 @Injectable()
 export class PlatformAdminClient {
+  constructor(private readonly metrics: MetricsService) {}
+
   async post<T>(path: string, body?: unknown): Promise<T> {
     return this.request<T>('POST', path, body);
   }
@@ -59,6 +62,7 @@ export class PlatformAdminClient {
         path,
         error: (err as Error).message,
       });
+      this.metrics.platformAdminCall('error');
       throw new AppError(
         502,
         ErrorCode.PLATFORM_UNAVAILABLE,
@@ -77,6 +81,7 @@ export class PlatformAdminClient {
       // not a 500 that makes them think the console is broken. The code is the
       // platform's vocabulary, not ours — the one place a foreign code enters
       // this project.
+      this.metrics.platformAdminCall('error');
       throw new AppError(
         res.status,
         (parsed?.error?.code as ErrorCode) ?? ErrorCode.INTERNAL_SERVER_ERROR,
@@ -84,6 +89,7 @@ export class PlatformAdminClient {
       );
     }
 
+    this.metrics.platformAdminCall('ok');
     return parsed?.data as T;
   }
 }

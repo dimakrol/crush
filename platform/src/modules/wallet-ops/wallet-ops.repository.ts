@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { executor, runInTransaction } from '@/config/postgres';
 import { walletOps } from '@/drizzle/schema';
+import { MetricsService } from '@/metrics/metrics.service';
 import { TxContext } from '@/shared/repositories/unit-of-work';
 import { IWalletOpsRepository } from './wallet-ops.repository.interface';
 import { NewWalletOp, WalletOp } from './wallet-op.types';
@@ -11,12 +12,17 @@ type WalletOpRow = typeof walletOps.$inferSelect;
 // Postgres implementation of the money outbox, bound to WALLET_OPS_REPOSITORY.
 @Injectable()
 export class WalletOpsRepository implements IWalletOpsRepository {
+  constructor(private readonly metrics: MetricsService) {}
+
   async enqueue(op: NewWalletOp, ctx?: TxContext): Promise<WalletOp | null> {
     const [row] = await executor(ctx)
       .insert(walletOps)
       .values(this.toRow(op))
       .onConflictDoUpdate(this.reviveOnConflict(op))
       .returning();
+    // A null row is a live PENDING/CONFIRMED op left untouched — nothing was
+    // enqueued, so it must not be counted.
+    if (row) this.metrics.walletOpEnqueued(op.kind);
     return row ? this.toOp(row) : null;
   }
 
@@ -28,6 +34,10 @@ export class WalletOpsRepository implements IWalletOpsRepository {
       // Same conflict rule as enqueue(): a live op keeps its row. Callers here
       // (the auto-cashout batch) only need "the move is tracked", not which row.
       .onConflictDoUpdate(this.reviveOnConflict(ops[0]));
+    // Batch insert does not report which rows were revived vs. left live, so
+    // this slightly over-counts when a row already existed; acceptable for a
+    // throughput signal on the (rare) duplicate-cashout path.
+    this.metrics.walletOpEnqueued(ops[0].kind, ops.length);
   }
 
   async claimBatch(limit: number, leaseMs: number): Promise<WalletOp[]> {

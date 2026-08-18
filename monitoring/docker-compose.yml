@@ -24,7 +24,12 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     networks:
+      # `monitoring` reaches Grafana + the exporters; `crush` (the app stack's
+      # network) lets Prometheus scrape the Nest services' /metrics directly by
+      # name (backend / white-label / backoffice), the same way the exporters
+      # reach postgres/redis.
       - monitoring
+      - crush
     restart: unless-stopped
 
   grafana:

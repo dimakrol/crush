@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { MetricsService } from '@/metrics/metrics.service';
 import { AuditService } from './audit.service';
 
 // Every state-changing request to /api, recorded whatever the outcome.
@@ -26,7 +27,10 @@ const SECRET_KEY = /password|secret|token|key/i;
 
 @Injectable()
 export class AuditGuard implements CanActivate {
-  constructor(private readonly audit: AuditService) {}
+  constructor(
+    private readonly audit: AuditService,
+    private readonly metrics: MetricsService,
+  ) {}
 
   canActivate(context: ExecutionContext): boolean {
     if (context.getType() !== 'http') return true;
@@ -49,6 +53,9 @@ export class AuditGuard implements CanActivate {
       if (written) return;
       written = true;
       const status = res.statusCode;
+      // Same derived action name and outcome as the audit row, so the metric
+      // and the log agree on what an operator did.
+      this.metrics.operatorAction(action, status < 400 ? 'ok' : 'error');
       this.audit.record({
         // req.user is filled in by JwtCookieGuard, which runs after this one —
         // read late, inside the listener, so it is there by then. Still absent

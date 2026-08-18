@@ -3,6 +3,7 @@ import { IBetRepository } from '@/modules/bets/bet.repository.interface'
 import { BetService } from '@/modules/bets/bet.service'
 import { IWalletOpsRepository } from '@/modules/wallet-ops/wallet-ops.repository.interface'
 import { WalletOp } from '@/modules/wallet-ops/wallet-op.types'
+import { MetricsService } from '@/metrics/metrics.service'
 import { WalletService } from '@/modules/wallet/wallet.service'
 import { AppError } from '@/shared/errors/AppError'
 import { ErrorCode } from '@/shared/errors/error-codes'
@@ -34,6 +35,11 @@ const mockGateway: jest.Mocked<Partial<GameGateway>> = {
   emitToUser: jest.fn(),
 }
 
+const mockMetrics: jest.Mocked<Partial<MetricsService>> = {
+  walletOpProcessed: jest.fn(),
+  setWalletOutboxBacklog: jest.fn(),
+}
+
 const makeOp = (overrides: Partial<WalletOp> = {}): WalletOp => ({
   id: 'op1',
   kind: 'CREDIT',
@@ -63,6 +69,7 @@ const build = () =>
     mockBetService as BetService,
     mockWalletService as WalletService,
     mockGateway as GameGateway,
+    mockMetrics as MetricsService,
   )
 
 beforeEach(() => {

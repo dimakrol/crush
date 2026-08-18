@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit, Inject } from '@nestjs/common'
 import { env } from '@/config/env'
 import { getRedis } from '@/config/redis'
 import { generateCrashPoint } from '@/shared/utils/crash'
+import { MetricsService } from '@/metrics/metrics.service'
 import { logger } from '@/shared/utils/logger'
 import { ROUND_REPOSITORY, IRoundRepository } from '@/modules/rounds/round.repository.interface'
 import { Round } from '@/modules/rounds/round.types'
@@ -30,6 +31,7 @@ export class RoundEngine implements OnModuleInit {
     @Inject(ROUND_REPOSITORY) private readonly roundRepo: IRoundRepository,
     private readonly betService: BetService,
     private readonly gateway: GameGateway,
+    private readonly metrics: MetricsService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -218,8 +220,12 @@ export class RoundEngine implements OnModuleInit {
   // must agree with what was paid.
   private async applyForceCrash(round: Round, multiplier: number): Promise<void> {
     const crashPoint = Math.max(1.01, multiplier)
-    await this.roundRepo.updatePhase(round.id, 'RUNNING', { crashPoint, forcedAt: new Date() })
+    const forcedAt = new Date()
+    await this.roundRepo.updatePhase(round.id, 'RUNNING', { crashPoint, forcedAt })
     round.crashPoint = crashPoint
+    // Mirror the DB write onto the in-memory object so runCrashed can tell a
+    // forced round from a fair one when it records the outcome metric.
+    round.forcedAt = forcedAt
     logger.warn('Round force-crashed by operator', { roundId: round.id, crashPoint })
   }
 
@@ -236,6 +242,8 @@ export class RoundEngine implements OnModuleInit {
         bet: { id: bet.id, roundId: bet.roundId, slotId: bet.slotId, status: 'LOST', amount: bet.amount },
       })
     }
+
+    this.metrics.roundEnded(round.forcedAt ? 'forced' : 'crashed', round.crashPoint)
 
     logger.info('Round CRASHED', { roundId: round.id, crashPoint: round.crashPoint })
     this.gateway.emitToAll('round:crashed', {

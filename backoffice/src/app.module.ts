@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AppController } from '@/app.controller';
+import { MetricsModule } from './metrics/metrics.module';
+import { MetricsInterceptor } from './metrics/metrics.interceptor';
 import { AuditGuard } from './modules/audit/audit.guard';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -17,6 +19,7 @@ import { GlobalExceptionFilter } from './shared/errors/error.filter';
 
 @Module({
   imports: [
+    MetricsModule,
     AuditModule,
     AuthModule,
     PlatformModule,
@@ -29,6 +32,7 @@ import { GlobalExceptionFilter } from './shared/errors/error.filter';
   ],
   providers: [
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
+    { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
     // The order of these three is the whole access-control design:
     //
     //   AuditGuard     authorizes nothing — it only attaches a response

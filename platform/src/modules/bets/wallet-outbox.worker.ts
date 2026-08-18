@@ -1,6 +1,7 @@
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import { env } from '@/config/env'
 import { AppError } from '@/shared/errors/AppError'
+import { MetricsService } from '@/metrics/metrics.service'
 import { logger } from '@/shared/utils/logger'
 import { GameGateway } from '@/socket/game.gateway'
 import { WalletOp } from '../wallet-ops/wallet-op.types'
@@ -39,6 +40,7 @@ export class WalletOutboxWorker implements OnModuleInit, OnModuleDestroy {
     private readonly betService: BetService,
     private readonly walletService: WalletService,
     private readonly gateway: GameGateway,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit(): void {
@@ -65,6 +67,9 @@ export class WalletOutboxWorker implements OnModuleInit, OnModuleDestroy {
   private async drain(): Promise<void> {
     try {
       const ops = await this.walletOpsRepo.claimBatch(BATCH_SIZE, LEASE_MS)
+      // Backlog gauge tracks the last claimed batch (0 when the outbox is idle),
+      // so it decays instead of latching at the last non-empty drain.
+      this.metrics.setWalletOutboxBacklog(ops.length)
       if (ops.length === 0) return
       logger.info('Draining wallet outbox', { count: ops.length })
       // Sequential on purpose: these are retries against a service that is
@@ -84,11 +89,13 @@ export class WalletOutboxWorker implements OnModuleInit, OnModuleDestroy {
       if (op.kind === 'DEBIT') {
         logger.warn('Stranded stake debit reclaimed by the outbox worker', { txRef: op.txRef, betId: op.betId })
         await this.betService.abandonStake(op, `stranded stake debit reclaimed after ${op.attempts} attempt(s)`)
+        this.metrics.walletOpProcessed('abandoned')
         return
       }
 
       await this.deliver(op)
       await this.walletOpsRepo.markConfirmed(op.txRef)
+      this.metrics.walletOpProcessed('confirmed')
       logger.info('Wallet op confirmed by the outbox worker', { txRef: op.txRef, kind: op.kind, attempts: op.attempts })
       await this.settleBet(op)
       await this.announceBalance(op)
@@ -148,11 +155,13 @@ export class WalletOutboxWorker implements OnModuleInit, OnModuleDestroy {
     if (!deterministic && op.attempts < MAX_ATTEMPTS) {
       const nextAttemptAt = new Date(Date.now() + backoffFor(op.attempts))
       await this.walletOpsRepo.scheduleRetry(op.txRef, nextAttemptAt, reason)
+      this.metrics.walletOpProcessed('retried')
       logger.warn('Wallet op failed, retry scheduled', { txRef: op.txRef, kind: op.kind, attempts: op.attempts, nextAttemptAt, error: reason })
       return
     }
 
     await this.walletOpsRepo.markFailed(op.txRef, reason)
+    this.metrics.walletOpProcessed('failed')
     // An undelivered win is money owed to the player, so the bet says so and
     // history stops claiming it was paid. A failed reversal leaves the bet
     // CANCELED — that status is still true — and the FAILED op is the record of

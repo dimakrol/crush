@@ -5,6 +5,7 @@ import { AppError } from '@/shared/errors/AppError'
 import { DuplicateKeyError } from '@/shared/errors/duplicate-key.error'
 import { ErrorCode } from '@/shared/errors/error-codes'
 import { IUnitOfWork, UNIT_OF_WORK } from '@/shared/repositories/unit-of-work'
+import { MetricsService } from '@/metrics/metrics.service'
 import { logger } from '@/shared/utils/logger'
 import { calculatePayout, isValidBetAmount } from '@/shared/utils/money'
 import { IWalletOpsRepository, WALLET_OPS_REPOSITORY } from '../wallet-ops/wallet-ops.repository.interface'
@@ -62,6 +63,7 @@ export class BetService {
     @Inject(WALLET_OPS_REPOSITORY) private readonly walletOpsRepo: IWalletOpsRepository,
     @Inject(UNIT_OF_WORK) private readonly uow: IUnitOfWork,
     private readonly walletService: WalletService,
+    private readonly metrics: MetricsService,
   ) {}
 
   async placeBet(userId: string, currency: string, slotId: BetSlotId, amount: number, autoCashOut: number | null): Promise<{ bet: Bet; balance: number }> {
@@ -152,6 +154,7 @@ export class BetService {
       throw new AppError(500, ErrorCode.INTERNAL_SERVER_ERROR, 'Bet could not be confirmed')
     }
 
+    this.metrics.betPlaced()
     return { bet: placed, balance }
   }
 
@@ -193,6 +196,7 @@ export class BetService {
     })
     if (!bet) throw new AppError(409, ErrorCode.BET_ALREADY_RESOLVED, 'Bet already resolved')
 
+    this.metrics.betCashedOut('manual')
     const balance = await this.creditWin(bet)
     return { bet, balance }
   }
@@ -348,6 +352,7 @@ export class BetService {
         })),
         ctx,
       )
+      this.metrics.betCashedOut('auto', cashedOut.length)
       return cashedOut
     })
   }

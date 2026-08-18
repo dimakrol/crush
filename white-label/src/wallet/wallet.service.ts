@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
+import {
+  MetricsService,
+  MovementType,
+} from '@/metrics/metrics.service';
 import { AppError } from '@/shared/errors/AppError';
 import { ErrorCode } from '@/shared/errors/error-codes';
 
@@ -22,7 +26,10 @@ export interface RollbackInput {
 
 @Injectable()
 export class WalletService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly metrics: MetricsService,
+  ) {}
 
   async getBalance(playerId: string, currency: string): Promise<number> {
     const wallet = await this.prisma.wallet.findUnique({
@@ -41,22 +48,45 @@ export class WalletService {
   // Atomic subtract. Idempotent on txRef: a replay returns the original result
   // without moving money. Rejects if the wallet can't cover the amount.
   async debit(ctx: MovementContext): Promise<number> {
-    const replay = await this.findByTxRef(ctx.txRef);
-    if (replay !== null) return replay;
+    return this.track('debit', async () => {
+      const replay = await this.findByTxRef(ctx.txRef);
+      if (replay !== null) return { balance: replay, replayed: true };
 
-    const amount = BigInt(ctx.amount);
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const moved = await tx.wallet.updateMany({
-          where: {
-            playerId: ctx.playerId,
-            currency: ctx.currency,
-            balance: { gte: amount },
-          },
-          data: { balance: { decrement: amount } },
-        });
+      const amount = BigInt(ctx.amount);
+      try {
+        const balance = await this.prisma.$transaction(async (tx) => {
+          const moved = await tx.wallet.updateMany({
+            where: {
+              playerId: ctx.playerId,
+              currency: ctx.currency,
+              balance: { gte: amount },
+            },
+            data: { balance: { decrement: amount } },
+          });
 
-        if (moved.count === 0) {
+          if (moved.count === 0) {
+            const wallet = await tx.wallet.findUnique({
+              where: {
+                playerId_currency: {
+                  playerId: ctx.playerId,
+                  currency: ctx.currency,
+                },
+              },
+            });
+            if (!wallet) {
+              throw new AppError(
+                404,
+                ErrorCode.WALLET_NOT_FOUND,
+                `No ${ctx.currency} wallet for player ${ctx.playerId}`,
+              );
+            }
+            throw new AppError(
+              402,
+              ErrorCode.INSUFFICIENT_BALANCE,
+              'Insufficient balance',
+            );
+          }
+
           const wallet = await tx.wallet.findUnique({
             where: {
               playerId_currency: {
@@ -65,149 +95,161 @@ export class WalletService {
               },
             },
           });
-          if (!wallet) {
+          // A duplicate txRef here (concurrent replay) throws P2002, rolling back
+          // the decrement above — the whole movement is undone, never double-spent.
+          await tx.transaction.create({
+            data: {
+              walletId: wallet!.id,
+              type: 'DEBIT',
+              amount,
+              txRef: ctx.txRef,
+              roundId: ctx.roundId,
+              slotId: ctx.slotId,
+              gameId: ctx.gameId,
+              balanceAfter: wallet!.balance,
+            },
+          });
+          return Number(wallet!.balance);
+        });
+        return { balance, replayed: false };
+      } catch (err) {
+        // resolveDuplicate returns on a P2002 replay and re-throws otherwise, so
+        // reaching this return means the movement collapsed onto an existing one.
+        const balance = await this.resolveDuplicate(err, ctx.txRef);
+        return { balance, replayed: true };
+      }
+    });
+  }
+
+  // Add funds. Idempotent on txRef.
+  async credit(ctx: MovementContext): Promise<number> {
+    return this.track('credit', async () => {
+      const replay = await this.findByTxRef(ctx.txRef);
+      if (replay !== null) return { balance: replay, replayed: true };
+
+      const amount = BigInt(ctx.amount);
+      try {
+        const balance = await this.prisma.$transaction(async (tx) => {
+          const existing = await tx.wallet.findUnique({
+            where: {
+              playerId_currency: {
+                playerId: ctx.playerId,
+                currency: ctx.currency,
+              },
+            },
+          });
+          if (!existing) {
             throw new AppError(
               404,
               ErrorCode.WALLET_NOT_FOUND,
               `No ${ctx.currency} wallet for player ${ctx.playerId}`,
             );
           }
-          throw new AppError(
-            402,
-            ErrorCode.INSUFFICIENT_BALANCE,
-            'Insufficient balance',
-          );
-        }
-
-        const wallet = await tx.wallet.findUnique({
-          where: {
-            playerId_currency: {
-              playerId: ctx.playerId,
-              currency: ctx.currency,
+          const wallet = await tx.wallet.update({
+            where: { id: existing.id },
+            data: { balance: { increment: amount } },
+          });
+          await tx.transaction.create({
+            data: {
+              walletId: wallet.id,
+              type: 'CREDIT',
+              amount,
+              txRef: ctx.txRef,
+              roundId: ctx.roundId,
+              slotId: ctx.slotId,
+              gameId: ctx.gameId,
+              balanceAfter: wallet.balance,
             },
-          },
+          });
+          return Number(wallet.balance);
         });
-        // A duplicate txRef here (concurrent replay) throws P2002, rolling back
-        // the decrement above — the whole movement is undone, never double-spent.
-        await tx.transaction.create({
-          data: {
-            walletId: wallet!.id,
-            type: 'DEBIT',
-            amount,
-            txRef: ctx.txRef,
-            roundId: ctx.roundId,
-            slotId: ctx.slotId,
-            gameId: ctx.gameId,
-            balanceAfter: wallet!.balance,
-          },
-        });
-        return Number(wallet!.balance);
-      });
-    } catch (err) {
-      return this.resolveDuplicate(err, ctx.txRef);
-    }
-  }
-
-  // Add funds. Idempotent on txRef.
-  async credit(ctx: MovementContext): Promise<number> {
-    const replay = await this.findByTxRef(ctx.txRef);
-    if (replay !== null) return replay;
-
-    const amount = BigInt(ctx.amount);
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const existing = await tx.wallet.findUnique({
-          where: {
-            playerId_currency: {
-              playerId: ctx.playerId,
-              currency: ctx.currency,
-            },
-          },
-        });
-        if (!existing) {
-          throw new AppError(
-            404,
-            ErrorCode.WALLET_NOT_FOUND,
-            `No ${ctx.currency} wallet for player ${ctx.playerId}`,
-          );
-        }
-        const wallet = await tx.wallet.update({
-          where: { id: existing.id },
-          data: { balance: { increment: amount } },
-        });
-        await tx.transaction.create({
-          data: {
-            walletId: wallet.id,
-            type: 'CREDIT',
-            amount,
-            txRef: ctx.txRef,
-            roundId: ctx.roundId,
-            slotId: ctx.slotId,
-            gameId: ctx.gameId,
-            balanceAfter: wallet.balance,
-          },
-        });
-        return Number(wallet.balance);
-      });
-    } catch (err) {
-      return this.resolveDuplicate(err, ctx.txRef);
-    }
+        return { balance, replayed: false };
+      } catch (err) {
+        const balance = await this.resolveDuplicate(err, ctx.txRef);
+        return { balance, replayed: true };
+      }
+    });
   }
 
   // Reverse a named debit. Idempotent (own txRef = `${refTxRef}:rollback`).
   // No-op (returns current balance) if the referenced debit never happened.
   async rollback(input: RollbackInput): Promise<number> {
-    const rollbackRef = `${input.refTxRef}:rollback`;
-    const replay = await this.findByTxRef(rollbackRef);
-    if (replay !== null) return replay;
+    return this.track('rollback', async () => {
+      const rollbackRef = `${input.refTxRef}:rollback`;
+      const replay = await this.findByTxRef(rollbackRef);
+      if (replay !== null) return { balance: replay, replayed: true };
 
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const wallet = await tx.wallet.findUnique({
-          where: {
-            playerId_currency: {
-              playerId: input.playerId,
-              currency: input.currency,
+      try {
+        const balance = await this.prisma.$transaction(async (tx) => {
+          const wallet = await tx.wallet.findUnique({
+            where: {
+              playerId_currency: {
+                playerId: input.playerId,
+                currency: input.currency,
+              },
             },
-          },
-        });
-        if (!wallet) {
-          throw new AppError(
-            404,
-            ErrorCode.WALLET_NOT_FOUND,
-            `No ${input.currency} wallet for player ${input.playerId}`,
-          );
-        }
+          });
+          if (!wallet) {
+            throw new AppError(
+              404,
+              ErrorCode.WALLET_NOT_FOUND,
+              `No ${input.currency} wallet for player ${input.playerId}`,
+            );
+          }
 
-        const original = await tx.transaction.findUnique({
-          where: { txRef: input.refTxRef },
-        });
-        if (!original || original.type !== 'DEBIT') {
-          // Nothing to reverse.
-          return Number(wallet.balance);
-        }
+          const original = await tx.transaction.findUnique({
+            where: { txRef: input.refTxRef },
+          });
+          if (!original || original.type !== 'DEBIT') {
+            // Nothing to reverse.
+            return Number(wallet.balance);
+          }
 
-        const updated = await tx.wallet.update({
-          where: { id: wallet.id },
-          data: { balance: { increment: original.amount } },
+          const updated = await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { balance: { increment: original.amount } },
+          });
+          await tx.transaction.create({
+            data: {
+              walletId: updated.id,
+              type: 'ROLLBACK',
+              amount: original.amount,
+              txRef: rollbackRef,
+              refTxRef: input.refTxRef,
+              roundId: original.roundId,
+              slotId: original.slotId,
+              gameId: original.gameId,
+              balanceAfter: updated.balance,
+            },
+          });
+          return Number(updated.balance);
         });
-        await tx.transaction.create({
-          data: {
-            walletId: updated.id,
-            type: 'ROLLBACK',
-            amount: original.amount,
-            txRef: rollbackRef,
-            refTxRef: input.refTxRef,
-            roundId: original.roundId,
-            slotId: original.slotId,
-            gameId: original.gameId,
-            balanceAfter: updated.balance,
-          },
-        });
-        return Number(updated.balance);
-      });
+        return { balance, replayed: false };
+      } catch (err) {
+        const balance = await this.resolveDuplicate(err, rollbackRef);
+        return { balance, replayed: true };
+      }
+    });
+  }
+
+  // Times one movement and records its outcome exactly once. A throw from the
+  // inner work (a deterministic refusal, or a non-P2002 error re-thrown by
+  // resolveDuplicate) is counted as `failed`; the duration is recorded either
+  // way. Keeps the three public methods free of metrics bookkeeping.
+  private async track(
+    type: MovementType,
+    work: () => Promise<{ balance: number; replayed: boolean }>,
+  ): Promise<number> {
+    const end = this.metrics.startWalletTimer(type);
+    try {
+      const { balance, replayed } = await work();
+      this.metrics.walletMovement(type, replayed ? 'replayed' : 'success');
+      return balance;
     } catch (err) {
-      return this.resolveDuplicate(err, rollbackRef);
+      this.metrics.walletMovement(type, 'failed');
+      throw err;
+    } finally {
+      end();
     }
   }
 
