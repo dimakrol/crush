@@ -26,7 +26,8 @@ const envSchema = z.object({
   // Game launch + iframe.
   GAME_FRONTEND_URL: z.string().min(1),
   GAME_ID: z.string().default('crash-pilot'),
-  LAUNCH_TOKEN_TTL_SECONDS: z.coerce.number().default(60),
+  // Session/launch-token lifetime is a code constant now (SESSION_TTL_SECONDS in
+  // sessions.service.ts), not an env var — the ticket is reusable within that window.
 
   // Seed balance in integer minor units (100000 = 1000.00 USD).
   INITIAL_DEMO_BALANCE: z.coerce.number().default(100000),

@@ -3,7 +3,7 @@
 //
 // Exercises the full money chain end-to-end against the running stack:
 //   lobby login → mint launch token → platform launch (authenticate) →
-//   debit (bet) → credit (win) → idempotency + single-use + reconciliation.
+//   debit (bet) → credit (win) → idempotency + reusable ticket + reconciliation.
 //
 // The white-label is the money authority; the platform is a thin HMAC client.
 // This script plays BOTH browser roles (lobby + game) and the platform's
@@ -107,7 +107,7 @@ async function main() {
   const startMinor = await wlBalance(pid, currency)
   ok(Number.isInteger(startMinor) && startMinor > 0, `seed balance = ${startMinor} minor`)
 
-  // 2) Mint a single-use launch token for the iframe.
+  // 2) Mint a reusable launch/session token for the iframe.
   console.log('\n[2] Mint launch token')
   const launch = await post(WL, '/sessions/launch', { gameId: 'crash-pilot' }, lobbyToken)
   ok(launch.status === 200, `POST /sessions/launch → 200 (got ${launch.status})`)
@@ -134,14 +134,15 @@ async function main() {
     `platform balance ${pl.player?.balance} ↔ ${startMinor} minor`,
   )
 
-  // 4) Single-use: replaying the same launch token must be rejected.
-  console.log('\n[4] Launch token is single-use')
+  // 4) Reusable ticket: the launch token is a session ticket with an absolute
+  //    TTL, so re-exchanging it (e.g. after a page reload) must succeed and mint
+  //    a fresh JWT for the SAME player, not 401 as a single-use token would.
+  console.log('\n[4] Launch token is a reusable session ticket')
   const replay = await post(PLATFORM, '/api/auth/launch', { token: launchToken })
-  ok(replay.status === 401, `replayed launch → 401 (got ${replay.status})`)
-  ok(
-    replay.body.error?.code === 'LAUNCH_TOKEN_ALREADY_USED',
-    `error code LAUNCH_TOKEN_ALREADY_USED (got ${replay.body.error?.code})`,
-  )
+  ok(replay.status === 200 || replay.status === 201, `re-exchanged launch → 2xx (got ${replay.status})`)
+  const rpl = replay.body.data ?? {}
+  ok(!!rpl.accessToken, 're-exchange mints a fresh accessToken')
+  ok(rpl.player?.id === pid, 're-exchange returns the same player')
 
   // 5) Platform live balance reconciles with the ledger.
   console.log('\n[5] Platform /api/wallet reconciles')

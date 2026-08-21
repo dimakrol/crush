@@ -6,6 +6,13 @@ import { AppError } from '@/shared/errors/AppError';
 import { ErrorCode } from '@/shared/errors/error-codes';
 import { WalletService } from '@/wallet/wallet.service';
 
+// Absolute session lifetime (code-level constant). The launch token is a
+// reusable session ticket valid for this window from the moment it is minted,
+// so the game can re-authenticate after a page reload without a fresh launch
+// from the lobby. There is no sliding extension and no explicit revocation —
+// the session simply expires after this window.
+const SESSION_TTL_SECONDS = 4 * 60 * 60; // 4 hours
+
 export interface LaunchResult {
   launchToken: string;
   gameUrl: string;
@@ -27,7 +34,7 @@ export class SessionsService {
     private readonly wallet: WalletService,
   ) {}
 
-  // Lobby mints a single-use launch token (short TTL) and returns the iframe URL.
+  // Lobby mints a reusable launch token (absolute TTL) and returns the iframe URL.
   async launch(playerId: string, gameId: string): Promise<LaunchResult> {
     const player = await this.prisma.player.findUnique({
       where: { id: playerId },
@@ -39,9 +46,7 @@ export class SessionsService {
 
     const currency = player.wallets[0]?.currency ?? 'USD';
     const launchToken = randomBytes(32).toString('hex');
-    const expiresAt = new Date(
-      Date.now() + env.LAUNCH_TOKEN_TTL_SECONDS * 1000,
-    );
+    const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
 
     await this.prisma.gameSession.create({
       data: {
@@ -58,61 +63,65 @@ export class SessionsService {
     return { launchToken, gameUrl, expiresAt };
   }
 
-  // Platform callback (HMAC). Consumes the launch token single-use and returns
-  // the player's identity + live balance, flipping the session to ACTIVE.
+  // Platform callback (HMAC). The launch token is a REUSABLE session ticket:
+  // the first exchange flips the session PENDING → ACTIVE, and every later
+  // exchange (e.g. after a page reload) re-reads the same ACTIVE session while
+  // it is within its absolute TTL. Returns the player's identity + live balance.
   async authenticate(token: string): Promise<AuthenticateResult> {
     const now = new Date();
-
-    const consumed = await this.prisma.gameSession.updateMany({
-      where: { launchToken: token, status: 'PENDING', expiresAt: { gt: now } },
-      data: { status: 'ACTIVE', consumedAt: now },
-    });
-
-    if (consumed.count === 0) {
-      const session = await this.prisma.gameSession.findUnique({
-        where: { launchToken: token },
-      });
-      if (!session) {
-        throw new AppError(
-          401,
-          ErrorCode.INVALID_LAUNCH_TOKEN,
-          'Unknown launch token',
-        );
-      }
-      if (session.status === 'PENDING' && session.expiresAt <= now) {
-        await this.prisma.gameSession.update({
-          where: { id: session.id },
-          data: { status: 'EXPIRED' },
-        });
-        throw new AppError(
-          401,
-          ErrorCode.LAUNCH_TOKEN_EXPIRED,
-          'Launch token expired',
-        );
-      }
-      throw new AppError(
-        401,
-        ErrorCode.LAUNCH_TOKEN_ALREADY_USED,
-        'Launch token already used',
-      );
-    }
 
     const session = await this.prisma.gameSession.findUnique({
       where: { launchToken: token },
       include: { player: true },
     });
-    // Guaranteed present: we just consumed it in the same request.
+
+    if (!session) {
+      throw new AppError(
+        401,
+        ErrorCode.INVALID_LAUNCH_TOKEN,
+        'Unknown launch token',
+      );
+    }
+
+    // Dead session — expired by TTL, or already terminated. Stamp EXPIRED once
+    // so the state is durable, then reject: the game must relaunch from the lobby.
+    if (
+      session.status === 'EXPIRED' ||
+      session.status === 'ENDED' ||
+      session.expiresAt <= now
+    ) {
+      if (session.status !== 'EXPIRED' && session.status !== 'ENDED') {
+        await this.prisma.gameSession.update({
+          where: { id: session.id },
+          data: { status: 'EXPIRED' },
+        });
+      }
+      throw new AppError(
+        401,
+        ErrorCode.LAUNCH_TOKEN_EXPIRED,
+        'Launch token expired',
+      );
+    }
+
+    // First exchange consumes the ticket (PENDING → ACTIVE); reloads no-op here.
+    if (session.status === 'PENDING') {
+      await this.prisma.gameSession.update({
+        where: { id: session.id },
+        data: { status: 'ACTIVE', consumedAt: now },
+      });
+    }
+
     const balance = await this.wallet.getBalance(
-      session!.playerId,
-      session!.currency,
+      session.playerId,
+      session.currency,
     );
 
     return {
-      playerId: session!.playerId,
-      currency: session!.currency,
+      playerId: session.playerId,
+      currency: session.currency,
       balance,
-      displayName: session!.player.displayName,
-      sessionId: session!.id,
+      displayName: session.player.displayName,
+      sessionId: session.id,
     };
   }
 }

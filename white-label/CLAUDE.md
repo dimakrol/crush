@@ -45,15 +45,21 @@ house style (`AppError`/`GlobalExceptionFilter`, `ZodValidationPipe`, startup en
   `event.origin`, renders the balance header as `minor/100`). `sandbox="allow-scripts
   allow-same-origin"`.
 - `auth/` — lobby player login (`POST /auth/login`, bcrypt + lobby JWT `{ sub, displayName }`).
-- `sessions/` — `POST /sessions/launch` (lobby JWT) mints a single-use launch token as a
-  `GameSession` row; `POST /wallet/authenticate` (HMAC) consumes it single-use and returns
-  identity + balance, flipping the session `PENDING → ACTIVE`.
+- `sessions/` — `POST /sessions/launch` (lobby JWT) mints a **reusable** launch token as a
+  `GameSession` row with an **absolute 4h TTL** (`SESSION_TTL_SECONDS`, a code constant in
+  `sessions.service.ts`); `POST /wallet/authenticate` (HMAC) is **idempotent**: the first call
+  flips the session `PENDING → ACTIVE`, and every later call (e.g. after a game page reload)
+  re-reads the same ACTIVE session while it is within its TTL, returning identity + balance.
+  Past the TTL (or `ENDED`) it is stamped `EXPIRED` and returns 401 — relaunch from the lobby.
+  There is no sliding extension and no explicit revocation; the token simply expires.
 - `wallet/` — the seamless wallet: `balance / debit / credit / rollback`. **HMAC-guarded,
   server-to-server only — never reachable from the browser.**
 - `players/` — seeding + admin `POST /admin/players/:id/reset` (HMAC).
 - `prisma/` — `PrismaService` + module.
 
-**Three trust boundaries:** lobby player JWT · wallet HMAC · single-use launch token.
+**Three trust boundaries:** lobby player JWT · wallet HMAC · reusable launch token (absolute-TTL
+session ticket — kept in the game URL so a reload re-authenticates; it is a bearer credential for
+the whole session, the deliberate trade for reload-survival).
 
 ## Key patterns
 
@@ -103,7 +109,6 @@ Validated at startup (`src/config/env.ts`); the server exits if any is missing. 
 | `OPERATOR_API_KEY` / `OPERATOR_SECRET` | Wallet HMAC — **must match the platform's** |
 | `GAME_FRONTEND_URL` | Base URL the lobby frames (`?token=` appended) |
 | `GAME_ID` | Default game id stamped on sessions/movements |
-| `LAUNCH_TOKEN_TTL_SECONDS` | Launch-token lifetime (default 60) |
 | `INITIAL_DEMO_BALANCE` | Seed balance in minor units (`100000` = 1000 USD) |
 | `CORS_ORIGIN` | Allowed game-frontend origin |
 

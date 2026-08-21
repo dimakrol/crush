@@ -35,11 +35,13 @@ origin.
 
 The game does **not** have its own login. The lobby opens it as
 `<iframe src="<game>/?token=<launchToken>&currency=USD&lang=en">`; the game exchanges that
-single-use token for a platform JWT.
+launch token for a platform JWT. The launch token is a **reusable session ticket** (absolute 4h
+TTL on the white-label side), so it is deliberately **kept in the URL** — a page reload re-reads
+it and re-authenticates without a fresh launch from the lobby.
 
-- `services/launch.ts` reads `?token=`/`?currency=` once at module load and **strips the token
-  from the URL** (`history.replaceState`) so it can't be replayed from history. `launchOnce()`
-  memoizes the exchange so React StrictMode's double-mount can't burn the single-use ticket.
+- `services/launch.ts` reads `?token=`/`?currency=` once at module load and **keeps the token in
+  the URL** (no `replaceState` stripping) so a reload can re-exchange it. `launchOnce()` memoizes
+  the exchange so React StrictMode's double-mount only hits the white-label once per page load.
 - `services/lobbyBridge.ts` posts game→lobby events, all pinned to `VITE_LOBBY_ORIGIN` (never
   `*`): `crashpilot:ready` (on mount), `crashpilot:balanceChanged { balance, currency }` (on every
   confirmed balance), `crashpilot:sessionEnded` (authenticated→guest). **Units gotcha:** the lobby
@@ -57,8 +59,10 @@ single-use token for a platform JWT.
 - `socket.ts` — singleton `socket.io-client`. Connects once at app start. Guests (no token) receive
   `round:*` broadcasts only; a token joins the `userId` room for private `bet:*` / `wallet:*` events.
   On authenticate mid-session it emits `authenticate { token }` (no reconnect).
-- `token.ts` — the platform JWT, held **in memory only** (no `localStorage`); a refresh ends the
-  session and you re-launch from the lobby. Keeps the change-subscription used by `socket.ts`.
+- `token.ts` — the platform JWT, held **in memory only** (no `localStorage`); it is **re-minted on
+  every page load** from the reusable URL launch token, so a refresh transparently re-authenticates
+  instead of ending the session. JWT lifetime is 4h (matches the session TTL), so continuous play
+  doesn't expire mid-session either. Keeps the change-subscription used by `socket.ts`.
 - `launch.ts` — one-shot launch handshake (see "Launch & framing" above).
 - `lobbyBridge.ts` — game→lobby postMessage channel (see above).
 - `authApi` (`launch()` only) / `betApi` / `walletApi` (`getBalance()` only) / `historyApi` — thin per-domain callers.

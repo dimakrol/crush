@@ -156,7 +156,6 @@ service's `.env.example` for the full list; the load-bearing ones:
 | `LOBBY_JWT_SECRET` / `LOBBY_JWT_EXPIRES_IN` | Lobby player session JWT |
 | `OPERATOR_API_KEY` / `OPERATOR_SECRET` | Wallet HMAC — must match the platform |
 | `GAME_FRONTEND_URL` | Base URL the lobby frames |
-| `LAUNCH_TOKEN_TTL_SECONDS` | Launch-token lifetime (default `60`) |
 | `INITIAL_DEMO_BALANCE` | Seed balance in **minor units** (`100000` = 1000 USD) |
 
 **Platform (`platform/`)** — game backend:
@@ -210,7 +209,8 @@ See `platform/CLAUDE.md`.
 ### Frontend (`frontend/crash-pilot/`)
 
 React 19 + TypeScript + Vite, Tailwind CSS v4 — the **iframe player**. On load it exchanges the
-lobby's single-use `?token=` for a platform JWT (held in memory), renders server-pushed round
+lobby's reusable `?token=` (kept in the URL, absolute 4h TTL) for a platform JWT (held in memory,
+re-minted on every reload), renders server-pushed round
 state via `requestAnimationFrame`, and mirrors balance/session events to the lobby over
 `postMessage`. Opened without a token it's a guest spectator. See `frontend/crash-pilot/CLAUDE.md`.
 

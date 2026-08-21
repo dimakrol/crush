@@ -20,7 +20,7 @@ const envSchema = z.object({
 
   REDIS_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(1),
-  JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
+  JWT_ACCESS_EXPIRES_IN: z.string().default('4h'),
   CORS_ORIGIN: z.string().min(1),
   ROUND_WAITING_SECONDS: z.coerce.number().default(5),
   ROUND_CRASHED_SECONDS: z.coerce.number().default(3),

@@ -44,7 +44,6 @@ services:
       OPERATOR_SECRET: ${OPERATOR_SECRET:-dev-operator-secret-change-me}
       GAME_FRONTEND_URL: http://localhost:${FRONTEND_PORT:-5274}
       GAME_ID: crash-pilot
-      LAUNCH_TOKEN_TTL_SECONDS: 60
       INITIAL_DEMO_BALANCE: 100000
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-5274}
       CHOKIDAR_USEPOLLING: "true"
