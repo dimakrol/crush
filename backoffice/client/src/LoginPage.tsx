@@ -1,4 +1,5 @@
 import { FormEvent, useState } from 'react';
+import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import {
   Box,
   Button,
@@ -8,6 +9,7 @@ import {
   Stack,
   TextField,
   Typography,
+  useTheme,
 } from '@mui/material';
 import { Notification, useLogin, useNotify } from 'react-admin';
 
@@ -15,6 +17,7 @@ import { Notification, useLogin, useNotify } from 'react-admin';
 // console is. An operator who has three tabs open needs the title to tell them
 // which system they are about to pause.
 export function LoginPage() {
+  const theme = useTheme();
   const login = useLogin();
   const notify = useNotify();
   const [username, setUsername] = useState('');
@@ -42,19 +45,41 @@ export function LoginPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
+        p: 2,
         bgcolor: 'background.default',
+        // A dark control-surface backdrop: two faint accent glows over the base
+        // so the sign-in card sits on something, not on flat grey.
+        backgroundImage: `radial-gradient(60rem 60rem at 15% -10%, ${theme.palette.primary.main}22, transparent 60%), radial-gradient(50rem 50rem at 110% 110%, ${theme.palette.secondary.main}1f, transparent 55%)`,
       }}
     >
-      <Card sx={{ width: 380, maxWidth: '90vw' }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom>
-            Crash Pilot — Backoffice
-          </Typography>
-          <Typography variant="body2" color="text.secondary" gutterBottom>
-            Operator sign-in
-          </Typography>
+      <Card sx={{ width: 400, maxWidth: '92vw' }}>
+        <CardContent sx={{ p: 4 }}>
+          <Stack spacing={1.5} sx={{ alignItems: 'center', mb: 3 }}>
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 52,
+                height: 52,
+                borderRadius: 3,
+                color: '#fff',
+                background: `linear-gradient(135deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
+                boxShadow: `0 8px 24px ${theme.palette.primary.main}44`,
+              }}
+            >
+              <RocketLaunchIcon />
+            </Box>
+            <Typography variant="h5" sx={{ fontWeight: 700 }}>
+              Crash Pilot
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Operator sign-in
+            </Typography>
+          </Stack>
+
           <form onSubmit={submit}>
-            <Stack spacing={2} sx={{ mt: 2 }}>
+            <Stack spacing={2}>
               <TextField
                 label="Username"
                 value={username}
@@ -74,10 +99,12 @@ export function LoginPage() {
               <Button
                 type="submit"
                 variant="contained"
+                size="large"
                 disabled={busy || !username || !password}
                 fullWidth
+                sx={{ mt: 1 }}
               >
-                {busy ? <CircularProgress size={20} /> : 'Sign in'}
+                {busy ? <CircularProgress size={22} color="inherit" /> : 'Sign in'}
               </Button>
             </Stack>
           </form>

@@ -5,7 +5,9 @@ import TimelineIcon from '@mui/icons-material/Timeline';
 import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import { Admin, Resource } from 'react-admin';
 import { Dashboard } from './Dashboard';
+import { Layout } from './Layout';
 import { LoginPage } from './LoginPage';
+import { darkTheme, lightTheme } from './theme';
 import { authProvider } from './authProvider';
 import { dataProvider } from './dataProvider';
 import { AuditLogList } from './resources/auditLog';
@@ -26,6 +28,13 @@ export function App() {
       authProvider={authProvider}
       loginPage={LoginPage}
       dashboard={Dashboard}
+      layout={Layout}
+      // Two purpose-built palettes in place of react-admin's stock grey. An ops
+      // screen is glanced at in a dark room as often as read in daylight, so
+      // dark leads and react-admin remembers which the operator picked.
+      theme={lightTheme}
+      darkTheme={darkTheme}
+      defaultTheme="dark"
       // Nothing renders — and therefore nothing is fetched — before the session
       // is confirmed. Without it the first paint fires a wave of requests that
       // all 401 while the login page is still loading.
