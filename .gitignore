@@ -84,3 +84,6 @@ service-account.json
 
 # Local PostgreSQL dumps (created from jobix-postgres; may contain sensitive data)
 pg-dumps/
+
+# Load-test outputs (tokens, summaries, metrics snapshots)
+scripts/loadtest/results/
