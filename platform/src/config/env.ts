@@ -22,6 +22,10 @@ const envSchema = z.object({
   JWT_ACCESS_SECRET: z.string().min(1),
   JWT_ACCESS_EXPIRES_IN: z.string().default('4h'),
   CORS_ORIGIN: z.string().min(1),
+  // /api/auth/launch is limited per IP; raise the cap for load tests, which mint
+  // every player's token from one address.
+  LAUNCH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  LAUNCH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
   ROUND_WAITING_SECONDS: z.coerce.number().default(5),
   ROUND_CRASHED_SECONDS: z.coerce.number().default(3),
   ROUND_GROWTH_RATE: z.coerce.number().default(0.06),

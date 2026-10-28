@@ -84,6 +84,17 @@ apart from real errors.
   # then: docker compose up -d --force-recreate platform
   ```
 
+### Launch rate limit (mint step)
+
+`POST /api/auth/launch` is limited to 30 requests / 15 min per IP, and minting
+sends one per player from a single address — beyond ~30 players you get `429`s
+and a short `tokens.json`. Restart the platform with the cap raised:
+
+```bash
+LAUNCH_RATE_LIMIT_MAX=100000   # platform env (docker-compose override or platform/.env)
+# then: docker compose up -d --force-recreate platform
+```
+
 ### The throughput ceiling (read this before interpreting numbers)
 
 A player may hold at most **2 bets (slots 1 & 2) per round**, and everyone shares
@@ -123,7 +134,10 @@ window), `dup_bets` (409, slot taken), `bet_lost` (round crashed before cashout)
 |---|---|---|
 | `LOAD_PLAYERS` | `500` | pool size (seed + mint + VU assignment) |
 | `MODE` | `A` | `A` realistic / `B` throughput |
-| `STAGES` | 50→200→500→1000→2000 | JSON k6 ramp stages |
+| `ROUND_PLAYERS` | `0` (off) | hold exactly N players betting in every round (constant VUs, no ramp, no think-time); also sets the default `LOAD_PLAYERS` |
+| `ROUND_DURATION` | `2m` | length of a `ROUND_PLAYERS` run |
+| `PEAK_VUS` | `LOAD_PLAYERS` | top of the default ramp (2.5% → 10% → 25% → 50% → 100% of peak) |
+| `STAGES` | scaled to peak | JSON k6 ramp stages (overrides the default ramp) |
 | `ABORT` | `true` | abort ramp on first threshold breach |
 | `BET_AMOUNT` | `1` | stake per bet (major units) |
 | `THINK_MIN`/`THINK_MAX` | `1`/`4` | MODE A between-round think-time (s) |

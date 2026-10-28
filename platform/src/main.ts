@@ -31,8 +31,8 @@ async function bootstrap() {
   app.use(
     '/api/auth/launch',
     rateLimit({
-      windowMs: 15 * 60 * 1000,
-      max: 30,
+      windowMs: env.LAUNCH_RATE_LIMIT_WINDOW_MS,
+      max: env.LAUNCH_RATE_LIMIT_MAX,
       standardHeaders: true,
       legacyHeaders: false,
     }),

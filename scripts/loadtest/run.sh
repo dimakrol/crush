@@ -20,7 +20,8 @@ cd "$ROOT"
 # ── config (override via env) ────────────────────────────────────────────────
 export PLATFORM_URL="${PLATFORM_URL:-http://localhost:4100}"
 export WL_URL="${WL_URL:-http://localhost:4200}"
-export LOAD_PLAYERS="${LOAD_PLAYERS:-500}"
+export ROUND_PLAYERS="${ROUND_PLAYERS:-0}"   # >0: hold exactly N players in every round (no ramp)
+export LOAD_PLAYERS="${LOAD_PLAYERS:-$(( ROUND_PLAYERS > 0 ? ROUND_PLAYERS : 500 ))}"
 export LOAD_PASSWORD="${LOAD_PASSWORD:-loadtest}"
 export LOAD_PREFIX="${LOAD_PREFIX:-load}"
 export MODE="${MODE:-A}"
@@ -39,6 +40,7 @@ if [ "$SKIP_SEED" != "1" ]; then
   # rootDir/type-check friction of running a TS file from another directory.
   ( cd "$ROOT/white-label" \
     && NODE_PATH="$ROOT/white-label/node_modules" TS_NODE_TRANSPILE_ONLY=1 \
+       TS_NODE_PROJECT="$ROOT/white-label/tsconfig.json" \
        npx ts-node --transpile-only "$ROOT/scripts/loadtest/seed-load.ts" )
 
   echo

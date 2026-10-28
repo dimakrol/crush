@@ -61,21 +61,36 @@ const cashoutOk = new Counter('cashout_success')
 const dupBets = new Counter('dup_bets') // 409 — slot already taken this round
 const betLost = new Counter('bet_lost') // round crashed before we cashed out
 
+// Default ramp scales with the player pool: peak VUs = number of minted tokens
+// (one VU per player — more VUs than players just collide on the same bet slots
+// and measure lock contention, not capacity). Override the peak with PEAK_VUS,
+// or the whole ramp with STAGES.
+const PEAK_VUS = Math.max(1, Number(__ENV.PEAK_VUS || tokens.length))
+const RAMP_FRACTIONS = [0.025, 0.1, 0.25, 0.5, 1]
 const stages = __ENV.STAGES
   ? JSON.parse(__ENV.STAGES)
   : [
-      { duration: '30s', target: 50 },
-      { duration: '30s', target: 200 },
-      { duration: '30s', target: 500 },
-      { duration: '30s', target: 1000 },
-      { duration: '30s', target: 2000 },
+      ...RAMP_FRACTIONS.map((f) => ({ duration: '30s', target: Math.max(1, Math.round(PEAK_VUS * f)) })),
       { duration: '20s', target: 0 },
     ]
 
+// Fixed-participation mode: ROUND_PLAYERS=N holds exactly N VUs (one per player)
+// for ROUND_DURATION instead of ramping. Every VU bets once per round window and
+// goes straight back to polling for the next one (no think-time), so N players
+// play in every round. N must not exceed the minted pool.
+const ROUND_PLAYERS = Number(__ENV.ROUND_PLAYERS || '0')
+if (ROUND_PLAYERS > tokens.length) {
+  throw new Error(`ROUND_PLAYERS=${ROUND_PLAYERS} > ${tokens.length} minted tokens — raise LOAD_PLAYERS`)
+}
+const ROUND_DURATION = __ENV.ROUND_DURATION || '2m'
+
+const betsScenario =
+  ROUND_PLAYERS > 0
+    ? { executor: 'constant-vus', vus: ROUND_PLAYERS, duration: ROUND_DURATION, gracefulStop: '15s' }
+    : { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '10s', gracefulStop: '15s' }
+
 export const options = {
-  scenarios: {
-    bets: { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '10s', gracefulStop: '15s' },
-  },
+  scenarios: { bets: betsScenario },
   thresholds: {
     place_duration: [{ threshold: 'p(95)<500', abortOnFail: ABORT, delayAbortEval: '10s' }],
     cashout_duration: [{ threshold: 'p(95)<500', abortOnFail: ABORT, delayAbortEval: '10s' }],
@@ -164,7 +179,7 @@ export default function () {
   }
   for (const id of betIds) cashout(auth, id)
 
-  if (MODE === 'A') sleep(THINK_MIN + Math.random() * (THINK_MAX - THINK_MIN))
+  if (MODE === 'A' && ROUND_PLAYERS === 0) sleep(THINK_MIN + Math.random() * (THINK_MAX - THINK_MIN))
 }
 
 // ── summary ────────────────────────────────────────────────────────────────
